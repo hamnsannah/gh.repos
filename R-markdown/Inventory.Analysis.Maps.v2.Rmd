@@ -1,0 +1,428 @@
+---
+output: pdf_document
+---
+
+# Inventory Analysis
+
+```{r setup, include= FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+########
+market1 <- "Bergen"
+test.date1 <- "March SAT"
+test1 <- "SAT"
+radius1 <- 5
+center.area1 <- "Malvern PA"
+zoom1 <- 5
+########
+
+agg.by.zip <- function(enroll.obj = "15-16", test.date, market.to.territory = "market", 
+                       geo.name = "all", cluster.radius, years.histor.data = 3){
+  wd <- getwd()
+  #setwd("D://Users/SPritchard/Documents/R/net-bob-scripts/")
+  if(enroll.obj == "15-16"){
+    yr16 <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/monthly.data/yr2016.csv", stringsAsFactors = FALSE)
+    yr15 <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/monthly.data/yr2015.csv", stringsAsFactors = FALSE)
+    yr17.1h <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/monthly.data/yr2017.1h.csv", stringsAsFactors = FALSE)
+    yr17.narrow <- yr17.1h[,1:29]
+    colnames(yr15) <- colnames(yr16[,1:29])
+    colnames(yr17.narrow) <- colnames(yr16[,1:29])
+    enrollments <- rbind(yr15, yr16[,1:29], yr17.narrow)
+    
+  } else {
+    enrollments <- enroll.obj
+  }
+  enrollments$NETBOB <- as.numeric(enrollments$NETBOB)
+  #print(head(enrollments))
+  library(geosphere)
+  library(zipcode)
+  sat.subset <- enrollments[enrollments$PROGRAM %in% "SAT",]
+  #print(head(sat.subset, 2))
+  sat.sum <- sum(sat.subset$NETBOB, na.rm = TRUE)
+  act.subset <- enrollments[enrollments$PROGRAM %in% "ACT",]
+  act.sum <- sum(act.subset$NETBOB, na.rm = TRUE)
+  sat.perc <- sat.sum/(sat.sum + act.sum)
+  act.perc <- (1-sat.perc)
+  #print(paste("SAT % is", round(sat.perc, 3) , "and ACT % is", round(act.perc, 3)))
+  programs.sub <- enrollments[enrollments$PROGRAM %in% c("SAT", "ACT", "NYSHS", "COLADV", "PSAT"),]
+  if(geo.name == "all"){
+    geo.sub <- programs.sub
+  } else {
+    geo.sub <- programs.sub[programs.sub$CP4.MARKET %in% geo.name,]
+  }
+  #test.sub
+  
+  test.date.month <- read.csv("D://Users/SPritchard/Music/Documents/R/inventory/test.date.by.enroll.month.csv", stringsAsFactors = FALSE)
+  this.test.date <- test.date.month[test.date.month$date.test %in% test.date
+                                    #& test.date.month$which.test %in% test.prepping.for ### testing if this is extraneous
+                                    , c(2,4)]
+  #print("months to include are")
+  #print(this.test.date)
+  
+  library(stringr)
+  geo.sub$TRANSACTION.MONTH <- str_trim(geo.sub$TRANSACTION.MONTH)
+  #print(head(geo.sub$TRANSACTION.MONTH))
+  
+  test.date.sub <- geo.sub[geo.sub$TRANSACTION.MONTH %in% this.test.date[,1]
+                           & geo.sub$PROGRAM %in% this.test.date[1,2],]
+  #print(test.date.sub)
+  
+  agg.table <- aggregate(NETBOB ~ BILL.ZIP, test.date.sub, sum)
+  agg.table$NETBOB <- (agg.table$NETBOB/years.histor.data)
+  #print(head(agg.table))
+  
+  agg.table <- agg.table[order(-agg.table$NETBOB),]
+  colnames(agg.table) <- c("zip", "netbob")
+  data("zipcode")
+  zipcode$zip <- as.integer(zipcode$zip) #### added line to solve leading zeros leading zeros
+  agg.table.latlong <- merge(agg.table, zipcode, by.x = "zip")
+  agg.table.latlong <- agg.table.latlong[order(-agg.table.latlong$netbob),]
+  #print(head(agg.table.latlong, 10))
+  pair1 <- agg.table.latlong[5 ,c(6, 5)]
+  pair2 <- agg.table.latlong[10, c(6, 5)]
+  random.dist.meters <- distGeo(pair1, pair2)
+  random.dist.miles <- random.dist.meters/1609.34
+  #print(random.dist.miles)
+  agg.table.latlong
+  nb.cluster <- numeric()
+  col.len <- nrow(agg.table.latlong)
+  for(i in 1:50){
+    ll.pair.i <- agg.table.latlong[i, c(6,5)]
+    nb.vec <- numeric()
+    #print(paste("calculating zip number", i, "of", 50))
+    for(z in 1:col.len){ 
+      if((z+i-1) <= col.len){ #prevents z+i approach from exceeding table length
+        ll.pair.z <- agg.table.latlong[(z+i-1), c(6,5)]
+        zip.dist <- (distGeo(ll.pair.i, ll.pair.z))/1609.34
+        #print(zip.dist)
+        
+        nb.z <- if(is.na(zip.dist) | zip.dist > cluster.radius){
+          0
+        } else {
+          agg.table.latlong[(z+i-1),2]
+        }
+        nb.vec <- c(nb.vec, nb.z)
+      } else{}
+    }
+    nb.cluster <- c(nb.cluster, sum(nb.vec))
+  }
+  #print(paste("col.len is", col.len))
+  #print(paste("length of nb.cluster", length(nb.cluster)))
+  if(col.len < 50){
+    nb.cluster <- nb.cluster[1:col.len]
+  } else {
+    filler.length <- (col.len - length(nb.cluster))
+    nb.cluster <- c(nb.cluster, rep(0, filler.length))
+    }
+  
+  class.need <- (nb.cluster/(661*10)) # AOV from 1/2015-6/2017 for SAT & ACT in-person was $661.  Planning on 10 students per class
+  agg.ll.clust <- cbind(agg.table.latlong, nb.cluster, class.need)
+  agg.ll.clust <- agg.ll.clust[order(-agg.ll.clust$nb.cluster),]
+  #print(head(agg.ll.clust, 15))
+  #setwd(wd)
+  agg.ll.clust
+  
+}
+
+
+
+imports.read <- function(test.cycle, market.to.territory = "market", geo.name = "all"){
+  
+  sat.imports <- read.csv("D://Users/SPritchard/Music/Documents/R/inventory/sat.imports.jul17.csv", stringsAsFactors = FALSE)
+  act.imports <- read.csv("D://Users/SPritchard/Music/Documents/R/inventory/act.imports.jul17.csv", stringsAsFactors = FALSE)
+  imports <- rbind(sat.imports, act.imports)
+  no.esection <- imports[substr(imports$Class, 11,11) != "E",]########
+  imports.noplus <- no.esection[no.esection$Product %in% c("SAT Prep - In Person","ACT Prep - In Person"),]
+  
+  
+  #codes.base.schedules <- read.csv() #### source from an emailed report
+  facility.addr <- read.csv("D://Users/SPritchard/Music/Documents/R/inventory/facility.zips.csv", stringsAsFactors = FALSE)
+  class.enrollments <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/PC Class Data.csv", stringsAsFactors = FALSE)
+  test.date.table <- read.csv("D://Users/SPritchard/Music/Documents/R/inventory/test.date.by.enroll.month.csv", stringsAsFactors = FALSE)
+  test.date.filter <- test.date.table[test.date.table$date.test %in% test.cycle, 5]
+  dupe.rows <- duplicated(class.enrollments$Class.Code)
+  #print(head(dupe.rows))
+  class.uniq <- class.enrollments[!dupe.rows, c(7,8,22)]
+  #merge together sat.imports, class.uniq, and facility zips in order to sort classes by test date and zips
+  #print(head(class.uniq))
+  #class.data.narrow <- class.data[,c(7,8,22)]
+  imports.merge1 <- merge(x = imports.noplus, y = class.uniq, by.x = "Class", by.y = "Class.Code", all.x = TRUE)
+  #print(head(imports.merge1, 4))
+  #print(dim(imports.merge1))
+  imports.merge2 <- merge(imports.merge1, facility.addr, by.x = "Venue", by.y = "FACILITY_NAME", all.x = TRUE)
+  #print(paste("dimensions of imports.noplus", dim(imports.noplus)))
+  #print(paste("dimensions of imports.merge2", dim(imports.merge2)))
+  
+  dupe.rows2 <- duplicated(imports.merge2$Class)
+  
+  imports.merge2.uniq <- imports.merge2[!dupe.rows2,]
+  #print(head(imports.merge2.uniq, 10))  
+  imports.market.test <- imports.merge2.uniq[imports.merge2.uniq$Market %in% geo.name &
+                                                       imports.merge2.uniq$Test.Cycle %in% test.date.filter,]
+  #print(head(test.date.table))
+  #print(head(imports.market.test, 25))
+  #print(dim(imports.market.test))
+  #missing.zip <- sat.imports.merge2.uniq[is.na(sat.imports.merge2.uniq$FACILITY_ZIP),]
+  #print(dim(missing.zip))
+  #write.csv(missing.zip, "D://Users/SPritchard/Downloads/missing.facility.zips.csv", row.names = FALSE)
+  imports.market.test
+  library(geosphere)
+  library(zipcode)
+  data("zipcode")
+  zipcode$zip <- as.integer(zipcode$zip) #### added for leading zeros
+  imports.latlong <- merge(imports.market.test, zipcode, by.x = "FACILITY_ZIP", by.y = "zip", all.x = TRUE)
+  #print(head(imports.latlong, 18))
+  
+}
+
+deficiency.calc <- function(agg.obj, import.obj, clusters.to.use = 20, cluster.radius = 5){
+  # I think this is close but the cbinding isn't working when I add a column of differences (after subtracting)
+  #print(head(agg.obj,4))
+  #print(head(import.obj, 6))
+  #print(paste("Starting deficiencies are", head(agg.obj$class.need, 20)))
+  #print(paste("Total successful classes for this test date were", nrow(import.obj)))
+  class.deficiency.vec <- numeric()
+  subtractor.vec <- numeric()
+  import.row.length <- nrow(import.obj)
+  if(import.row.length < clusters.to.use){
+    clusters.to.use <- import.row.length
+  }
+  for(a in 1:clusters.to.use){
+    agg.pair.a <- agg.obj[a, c(6,5)]
+    subtractor <- 0
+    subtract.total <- 0
+    
+    for(i in 1:import.row.length){ 
+      
+      imp.pair.i <- import.obj[i, c(17,16)]
+      pair.dist.meters <- distGeo(agg.pair.a, imp.pair.i)
+      pair.dist.miles <- pair.dist.meters/1609.34 # number of meters in a mile
+      #print(paste("pair.dist.miles is", pair.dist.miles))
+      if(pair.dist.miles <= cluster.radius){ #switch 5 to a variable
+        subtractor <- 1
+        #print(paste("a =", a, "; i =", i, "and mileage is 5 or less"))
+      } else{
+        subtractor <- 0
+        #print(paste("a =", a, "; i =", i, "and mileage is over 5"))
+      }
+      subtract.total <- subtract.total + subtractor
+    }
+    #print(paste("import.row.length is", import.row.length))
+    #print(paste("subtract.total is", subtract.total))
+    class.need.a <- agg.obj[a, 8]
+    #print(paste("class.need.a is", class.need.a))
+    class.deficiency <- (class.need.a-subtract.total)
+    #print(paste("class.definciency is", class.deficiency))
+    class.deficiency.vec <- c(class.deficiency.vec, class.deficiency)
+    subtractor.vec <- c(subtractor.vec, subtract.total)
+    #print(paste("class.deficiency.vec is", class.deficiency.vec))
+    }
+    class.def.length <- length(class.deficiency.vec)
+    agg.true.deficiency <- cbind((agg.obj[c(1:class.def.length),]), subtractor.vec, class.deficiency.vec)
+    agg.true.deficiency <- agg.true.deficiency[order(-agg.true.deficiency$class.deficiency.vec),]
+      
+    
+    #print(head(agg.true.deficiency, 10))
+    #agg.true.deficiency$netbob <- round(agg.true.deficiency$netbob, 0)
+    #agg.true.deficiency$nb.cluster <- round(agg.true.deficiency$nb.cluster, 0)
+    #agg.true.deficiency$class.need <- round(agg.true.deficiency$class.need, 1)
+    #agg.true.deficiency$class.deficiency.vec <- round(agg.true.deficiency$class.deficiency.vec, 1)
+    #agg.true.def.narrow <- agg.true.deficiency[,c(1, 3, 4, 2, 7, 8, 9, 10)]
+    #colnames(agg.true.def.narrow) <- c("zip.code", "city", "state", "netbob", paste0("netbob.in.", cluster.radius, "mi.radius"), "class.demand", "imports.here", "class.deficit")
+    #agg.true.def.narrow # THIS is part of the output I'd like to product, but can't strip out lat long yet; maybe downstream
+    agg.true.deficiency
+    #print(agg.true.deficiency)
+    agg.true2 <- agg.true.deficiency
+    for(d in 2:nrow(agg.true2)){
+      #print(d)
+      indices.vec <- c(1:(d-1))
+      #print(indices.vec)
+
+      cluster.pair.d <- agg.true2[d, c(6,5)]
+      elim <- 0
+      elim.total <- 0
+       # accounts for the fact that agg.true2 is being shortened during loops
+      for(p in indices.vec){
+        cluster.pair.p <- agg.true2[p, c(6,5)]
+        dist.p <- (distGeo(cluster.pair.d, cluster.pair.p)/1609.34)
+        if(dist.p <= cluster.radius) { #this if clause gives a 1 if the d cluster is within the given cluster radius of another cluster
+          elim <- 1
+        } else {
+          elim <- 0
+        }
+        elim.total <- (elim.total + elim)
+      }
+      if(elim.total >=1){
+        agg.true2[d,c(2, 5:10)] <- c(rep(0,7))
+      }
+      
+    }
+    agg.true2 <- agg.true2[agg.true2$class.deficiency.vec > .00001,]
+    agg.true2
+    
+}
+
+venue.find <- function(def.calc.df){
+  facilities <- read.csv("D://Users/SPritchard/Music/Documents/R/inventory/facility.zips.csv", stringsAsFactors = FALSE)
+  #print(head(facilities))
+  
+  
+  df.rows <- nrow(def.calc.df)
+  fac.rows <- nrow(facilities)
+  #print(fac.rows)
+  #Sys.sleep(3)
+  library(geosphere)
+  library(zipcode)
+  data("zipcode")
+  zipcode$zip <- as.integer(zipcode$zip) #### fixes leading zeros
+  zipcode2 <- zipcode
+  zipcode2$zip <- as.integer(zipcode2$zip)
+  facilities.zip <- merge(facilities, zipcode2, by.x = "FACILITY_ZIP", by.y = "zip", all.x = TRUE)
+  #print(head(facilities.zip))
+  pioneer.vec <- data.frame()
+  for(c in 1:df.rows){
+    cluster.pair.c <- def.calc.df[c, c(6,5)]
+    c.f.dist.vec <- numeric()
+    for(f in 1:fac.rows){
+      fac.pair.f <- facilities.zip[f, c(6,5)]
+      c.f.dist <- (distGeo(cluster.pair.c, fac.pair.f)/1609.34)
+      c.f.dist.vec <- c(c.f.dist.vec, c.f.dist)
+      #print(paste0("checking facility ", f, " of ", fac.rows, " for cluster # ", c, " of ", df.rows))
+      #print(paste("cluster.pair.c is", cluster.pair.c, "fac.pair.f is", fac.pair.f, "c.f.dist is", c.f.dist))
+      #print(paste("c.f.dist.vec is", c.f.dist.vec))
+    }
+    fac.dist.from.c <- cbind(facilities.zip, c.f.dist.vec)
+    fac.dist.from.c <- fac.dist.from.c[order(fac.dist.from.c$c.f.dist.vec),]
+    best.venue.for.zip <- fac.dist.from.c[1, c(2, 3, 4, 1, 7, 5, 6)]
+    #print(best.venue.for.zip)
+    pioneer.vec <- rbind(pioneer.vec, best.venue.for.zip)
+  }
+  #print(pioneer.vec)
+  pioneer.vec
+}
+
+
+inventory.map.clusters <- function(df.class.need, df.imports, df.pioneers, center.area, zoom.market){
+    library(ggplot2)
+    library(ggmap)
+    library(ggalt)
+    location <- geocode(center.area)
+    g <- 0
+    g <- ggmap(get_map(location = center.area, zoom = zoom.market, source = "google", maptype = "roadmap")) +
+      geom_point(aes(x=longitude, y=latitude, size = class.need), data = df.class.need, alpha = 0.7, color = "tomato")
+      #+ geom_point(aes(x=longitude, y=latitude), data = df.imports, alpha = 0.7, size = 5, color = "yellow")
+      #+ geom_point(aes(x=longitude, y=latitude), data = df.pioneers, color = "blue", size = 5, alpha = 0.5)
+    print(g)
+  }
+
+inventory.map.imports <- function(df.class.need, df.imports, df.pioneers, center.area, zoom.market){
+  library(ggplot2)
+  library(ggmap)
+  library(ggalt)
+  location <- geocode(center.area)
+  g <- 0
+  g2 <- 0
+  g3 <- 0
+  g2 <- ggmap(get_map(location = center.area, zoom = zoom.market, source = "google", maptype = "roadmap")) +
+    geom_point(aes(x=longitude, y=latitude, size = class.need), data = df.class.need, alpha = 0.7, color = "tomato")
+    + geom_point(aes(x=longitude, y=latitude), data = df.imports, alpha = 0.7, size = 5, color = "yellow")
+    #+ geom_point(aes(x=longitude, y=latitude), data = df.pioneers, color = "blue", size = 5, alpha = 0.5)
+  print(g2)
+}
+
+inventory.map.pioneers <- function(df.class.need, df.imports, df.pioneers, center.area, zoom.market){
+  library(ggplot2)
+  library(ggmap)
+  library(ggalt)
+  library(ggrepel)
+  location <- geocode(center.area)
+  #cluster.labels <- paste(df.class.need$city, df.class.need$zip, sep = "-")
+  #df.imports <- cbind(df.imports, cluster.labels)
+  g <- ggmap(get_map(location = center.area, zoom = zoom.market, source = "google", maptype = "roadmap")) +
+    geom_point(aes(x=longitude, y=latitude, size = class.need), data = df.class.need, alpha = 0.7, color = "tomato") +
+    geom_point(aes(x=longitude, y=latitude), data = df.imports, alpha = 0.7, size = 5, color = "yellow") +
+    geom_point(aes(x=longitude, y=latitude), data = df.pioneers, color = "blue", size = 5, alpha = 0.5)
+    #geom_label_repel(data = df.imports, aes(x = longitude, y = latitude, label = Class), size = 3) 
+    # + geom_label_repel(data = df.class.need, aes(x = longitude, y = latitude, label = cluster.labels), size = 3)
+  
+  print(g)
+}
+
+deficiency.calc.cleaner <- function(df.from.deficiency.calc.R){
+  df.clean <- df.from.deficiency.calc.R[,c(1, 3, 4, 2, 7, 8, 9, 10)]
+  df.clean$netbob <- paste0("$", round(df.clean$netbob, 0))
+  df.clean$nb.cluster <- paste0("$", round(df.clean$nb.cluster, 0))
+  df.clean$class.need <- round(df.clean$class.need, 1)
+  df.clean$class.deficiency.vec <- round(df.clean$class.deficiency.vec, 1)
+  colnames(df.clean) <- c("Zip.Code", "City", "State", "Net.BoB", 
+  "Netbob.in.Radius", "Class.Demand", "Imports.Here", "Class.Deficit")
+  df.clean.nrow <- nrow(df.clean)
+  row.names(df.clean) <- 1:df.clean.nrow
+  df.clean
+}
+
+venue.find.cleaner <- function(df.from.venue.find.R){
+  venue.clean <- df.from.venue.find.R[,1:5]
+  venue.clean$c.f.dist.vec <- round(venue.clean$c.f.dist.vec, 1)
+  colnames(venue.clean) <- c("Facility", "City", "State", "Zip.Code", "Dist.From.Cluster")
+  venue.nrow <- nrow(venue.clean)
+  row.names(venue.clean) <- 1:venue.nrow
+  venue.clean
+}
+
+#### Use the functions
+
+agg1 <- agg.by.zip(test.date = test.date1, geo.name = market1, cluster.radius = radius1)
+
+imports.df <- imports.read(test.date1, geo.name = market1)
+
+def.calc.df <- deficiency.calc(agg1, imports.df, cluster.radius = radius1)
+
+def.calc.clean <- deficiency.calc.cleaner(def.calc.df)
+
+venue.pioneer <- venue.find(def.calc.df)
+
+pioneer.clean <- venue.find.cleaner(venue.pioneer)
+
+
+#print(head(venue.pioneer))
+
+```
+
+
+
+```{r, echo=FALSE, warning= FALSE, message=FALSE}
+
+#library(gridExtra, quietly = TRUE, warn.conflicts = FALSE)
+#grid.table(def.calc.clean)
+
+```
+
+
+
+```{r, echo=FALSE, warning= FALSE, message=FALSE}
+#grid.table(pioneer.clean)
+
+```
+
+# Map Visualization of Classes
+###Top Net BoB Clusters (in Red), 
+###Last Years's Classes (in Yellow) 
+###Pioneer Recommendations (in Blue) 
+
+```{r, echo=FALSE, warning= FALSE, message=FALSE, fig.height= 8, fig.width= 8}
+
+pioneers <- inventory.map.pioneers(df.class.need = def.calc.df, df.imports = imports.df, 
+                                   df.pioneers = venue.pioneer, center.area = center.area1, zoom.market = zoom1)
+
+```
+
+```{r, echo=FALSE, warning= FALSE, message=FALSE, fig.height= 8, fig.width= 8}
+#imports <- inventory.map.imports(df.class.need = def.calc.df, df.imports = imports.df, 
+                                   #df.pioneers = venue.pioneer, center.area = center.area1, zoom.market = zoom1)
+```
+
+```{r, echo=FALSE, warning= FALSE, message=FALSE, fig.height= 8, fig.width= 8}
+#clusters <- inventory.map.clusters(df.class.need = def.calc.df, df.imports = imports.df, 
+#                                  df.pioneers = venue.pioneer, center.area = center.area1, zoom.market = zoom1)
+```

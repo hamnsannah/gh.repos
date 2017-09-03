@@ -1,0 +1,792 @@
+---
+output: pdf_document
+---
+##Retail Performance By BD - Adjusted Hug + Handshake Net BoB
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+### v6a uses files that represent the pre-june '17 restructuring market structure
+###   WATCH OUT FOR THE FACT THAT ly.ytlastmonth.csv file used here may not have months after may included!!
+
+
+
+## v5 intends to automate the start dates of MTD, QTD, and YTD ranges
+## Look at lines 511-515 to update; as quarter changes also update QTD
+#setwd("D://Users/SPritchard/Downloads")
+
+library(ggplot2)
+library(dplyr, quietly = TRUE, verbose = FALSE, warn.conflicts = FALSE)
+library(gridExtra, quietly = TRUE, warn.conflicts = FALSE)
+
+new.month <- function(downloads.name) {
+  library(xlsx,quietly = TRUE, verbose = FALSE, warn.conflicts = FALSE)
+  full.path <- paste0("D://Users/SPritchard/Downloads/",downloads.name)
+  month.data <- read.xlsx2(full.path, sheetIndex = 1, colIndex = c(1:39), startRow = 2, 
+                          colClasses = c(rep("character", 4), "numeric", rep("character", 2), 
+                                         "numeric", rep("character", 6), rep("numeric", 4),  
+                                         rep("character", 4), rep("numeric", 6), rep("character", 6), 
+                                         "numeric", rep("character", 4)), stringsAsFactors = FALSE)
+  message <- paste(downloads.name, "has been read in and dim equal") 
+  month.data
+
+}
+
+#END new.month.R
+
+mtd.prep <- function(mtd.obj, class.data.obj, st.date.priormnth, end.date.curmnth){
+  
+  three.fix <- function(df.to.fix, class.data.object, start.date, end.date){
+    
+    #READ IN email.glean.R (inside three.fix.R)
+    
+    email.glean <- function(df.to.fix) {
+      df.f <- df.to.fix
+      df.len <- nrow(df.f)
+      df.col.names <- colnames(df.f)
+      if(df.col.names[36] != "EMAIL1"){
+        print("ERROR: Column 36 not EMAIL1 in input")
+      }
+      split.addr <- strsplit(df.f[,36], "@")
+      doms <- character(length = 0)
+      for(i in 1:df.len){
+        dom.i <- split.addr[[i]][2]
+        doms <- c(doms, dom.i)
+        
+      }
+      df.wdoms <- cbind(df.f, doms)
+      
+      sch.emails <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/emaildoms.schools2.csv", stringsAsFactors = FALSE)
+      col.sch.emails <- colnames(sch.emails)
+      sch.emails.rows <- nrow(sch.emails)
+      all.doms <- sch.emails[,3]
+      for(t in 1:sch.emails.rows){
+        df.f.t <- df.wdoms[df.wdoms$doms %in% all.doms[t],]
+        msg.t <- paste0("checking email for row ", t, " of ", sch.emails.rows)
+
+        t.name <- row.names(df.f.t)
+        
+        if(nrow(df.f.t) >=1) {
+          for(q in 1:nrow(df.f.t)){
+            if(df.f.t[q,21] == ""){
+              df.f.t[q,21] <- sch.emails[t, 4]
+            }
+          }
+          
+        } #&& (is.na(df.f.t[,21]))) #| df.f.t[,21] == "Unknown")) 
+
+        if(nrow(df.f.t) >=1) {
+          for(q in 1:nrow(df.f.t)){
+            df.wdoms[rownames(df.wdoms) == t.name[q],] <- df.f.t[q,]
+          }
+        }
+
+      }
+      df.wdoms
+    }
+    # END OF email.glean.R (inside three.fix.R)
+    
+    #READ IN priv.venue.fix2.R (inside three.fix.R)
+    
+    priv.venue.fix2 <- function(df.to.fix, now.class.object, start.date, end.date){
+      
+      all.netbob <- sum(df.to.fix$NETBOB)
+
+      missing.r1 <- df.to.fix[df.to.fix$SCHOOL.NAME == "",]
+      missing.nb1 <- sum(missing.r1[,27])
+      
+      now.class.object[,15] <- as.Date(now.class.object[,15], "%m/%d/%Y")
+      sdate <- as.Date(start.date)
+      edate <- as.Date(end.date)
+      now.class.short <- now.class.object[now.class.object$Enrollment.Date >= sdate & now.class.object$Enrollment.Date <= edate ,]
+      
+      
+      pri.vens <- read.csv("D://USers/SPritchard/Music/Documents/R/net-bob-scripts/private-class-venues.csv", stringsAsFactors = FALSE)
+      
+      classobj.ids <- now.class.short[now.class.short$Market %in% pri.vens$facility.market 
+                                      & now.class.short$Facility %in% pri.vens$facility, ]
+      pri.ids.sch <- merge(classobj.ids, pri.vens, by.x = "Facility", by.y = "facility", all.y = FALSE)
+      
+      df.f <- df.to.fix
+      df.col.names <- colnames(df.f)
+      adjusts <- pri.ids.sch
+      adjust.rows <- nrow(adjusts)
+      adjusts.ids <- adjusts[,12]
+      market.hier <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/market.hierarchy.csv", stringsAsFactors = FALSE)
+      #print(head(adjusts.ids))
+      fixed.enrolls <- vector(mode = "character", length = 22)
+      for(i in 1:adjust.rows){
+        df.f.i <- df.f[df.f$ENROLLMENT.ID %in% adjusts.ids[i],]
+        
+        msg.i <- paste0("Checking EID ", i, " of ", adjust.rows, " in private class venues")
+
+        i.name <- row.names(df.f.i)
+        
+        if(nrow(df.f.i) >= 1) { df.f.i[,4] <- adjusts[i, 25]} #market
+        
+        i.hier <- market.hier[market.hier$MARKET_NAME == adjusts[i, 25],]
+
+        df.f.i[,c(1,2,3)] <- i.hier[,c(1,2,3)] # aligns territory, region & market group with new market
+        
+        if(nrow(df.f.i) >= 1) { df.f.i[,21] <- adjusts[i, 24]} #school
+        df.f.i <- df.f.i[1,] #first row only in case of mult entries with EID such as drop switch
+        df.f[rownames(df.f) == i.name,] <- df.f.i
+
+      }
+      
+      missing.r2 <- df.f[df.f$SCHOOL.NAME == "",]
+      #print(colnames(df.f))
+      missing.nb2 <- sum(missing.r2[,27])
+      #print(paste("missing net bob after priv.venue.fix2 equals", missing.nb2))
+      perc.miss1 <- (missing.nb1/all.netbob)
+      perc.miss2 <- (missing.nb2/all.netbob)
+
+      df.f
+      
+      #print(head(now.class.short))
+    }
+    
+    # END OF READ IN priv.venue.fix2.R (inside three.fix.R)
+    
+    # READ IN dupe.schools.R (inside three.fix.R)
+    
+    dupe.schools <- function(df.to.fix){
+      dfs <- df.to.fix
+      dschools.tbl <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/dupe.schools.csv", stringsAsFactors = FALSE)
+      #print("dupe table read in")
+      dfs.rows <- nrow(dfs)
+      #print(dfs.rows)
+      for(p in 1:dfs.rows){
+        #print(paste0("Checking for dupes in row ", p, " of ", dfs.rows))
+        if(dfs$SCHOOL.NAME[p] %in% dschools.tbl$Duplicate.Name ){
+          dupe.row <- dschools.tbl[dschools.tbl$Duplicate.Name == dfs$SCHOOL.NAME[p],]
+          if(dfs$CP4.MARKET[p] == dupe.row[1,1]){
+            dfs$SCHOOL.NAME[p] <- dupe.row[1,3]  
+          }
+          
+        }
+      }
+      dfs
+    }
+    
+    # END OF READ IN dupe.schools.R (inside three.fix.R)
+    
+    # USE FUNCTIONS (inside three.fix.R)
+    
+    df.gleaned <- email.glean(df.to.fix)
+    
+    df.priv <- priv.venue.fix2(df.gleaned, class.data.object, start.date, end.date )
+    
+    df.unduped <- dupe.schools(df.priv)
+    
+    missing.r1 <- df.to.fix[df.to.fix$SCHOOL.NAME == "",]
+    missing.nb1 <- sum(missing.r1$NETBOB, na.rm = TRUE)
+    
+    missing.r2 <- df.unduped[df.unduped$SCHOOL.NAME == "",]
+    missing.nb2 <- sum(missing.r2$NETBOB, na.rm = TRUE)
+    all.netbob <- sum(df.to.fix$NETBOB, na.rm = TRUE)
+    
+    perc.miss1 <- (missing.nb1/all.netbob)
+    perc.miss2 <- (missing.nb2/all.netbob)
+    
+    df.unduped
+  }
+  # END OF three.fix.R
+  
+  # Purpose: adds HHW category and whether to include or exclude as a partner school
+  # Next step 2: instead of NA schools not on the list or blank should be "Unknown"
+  # has an extra row of zeros at top which can be removed
+  
+  hhpart.append <- function(df.append){
+    #1 import filter file
+    #2 add hug, handshake, Wave, Unknown, and Exclude, Okay to df.append
+    #3 intermediate step of keepiing original doc
+    hh.list <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/hh.partners.csv", stringsAsFactors = FALSE)
+    df.length <- nrow(df.append)
+    df.width <- length(colnames(df.append))
+    matrix1 <- matrix(0, ncol = (df.width+2))
+    df.new <- as.data.frame(matrix1)
+    #print(dim(df.new))
+    for(i in 1:df.length){
+      i.msg <- paste0("adding categories to row ", i, " of ", df.length)
+      #print(i.msg)
+      df.i <- df.append[i,]
+      #print(df.i)
+      #print(head(hh.list[,2]))
+      #print(df.append$SCHOOL.NAME[i])
+      df.i.cats <- hh.list[hh.list[,2] %in% df.append$SCHOOL.NAME[i],c(1,2,3,4)]
+      if(nrow(df.i.cats)==0){
+        df.i.cats2 <- rep(0, 2)
+      } else if(nrow(df.i.cats)>=2){
+        df.i.cats2 <- hh.list[hh.list[,1] %in% df.i.cats[,1],]
+        df.i.cats2 <- df.i.cats2[1,]
+      } else if(nrow(df.i.cats)==1){
+        df.i.cats2 <- df.i.cats
+      }
+      #print(df.i.cats)
+      #print(nrow(df.i.cats))
+      #print(dim(df.i.cats))
+      #print("cats2 =")
+      #print(df.i.cats2)
+      
+      df.i.append <- c(df.i, df.i.cats2[c(3:4)])
+      df.i.df <- as.data.frame(df.i.append)
+      
+      cnames <- colnames(df.i.df)
+      cname.len <- length(cnames)
+      
+      cnames[c((cname.len - 1),(cname.len))] <- c("Category", "Include.Exclude") # IF DOMS COL ADDED, MAYBE USE cnames[c(41,42)] <- c("Category", "Include.Exclude")
+      colnames(df.i.df) <- cnames
+      colnames(df.new) <- colnames(df.i.df)
+      df.new <- rbind(df.new, df.i.df)
+      
+    }
+    df.new
+  }
+  
+  #END OF hhpart.append.R
+  
+  cols.owns <- function(object, market.column){
+    
+    object.width <- length(colnames(object))
+    
+    mark.own <- read.csv("D://Users/SPritchard/Music/Documents/R/zip-sort/market-ownership-old.1H17.csv", stringsAsFactors = FALSE)
+    
+    object.wgeos <- object
+    market.col <- object.width
+    
+    owners.df <- data.frame("bd" = 0, "crd" = 0, "owner" = 0, "rd" = 0)
+    owners.cols <- colnames(owners.df)
+    vec.len <- nrow(object.wgeos)
+    #print(head(mark.own, 4))
+    for(t in 1:vec.len){
+      msg.t <- paste0("adding owners to row ", t, " of ", vec.len)
+      #print(msg.t)
+      owners.t <- if(nrow(mark.own[mark.own[, 4] %in% object.wgeos[t, 4], c(5, 6, 7, 8)])>=1){
+        mark.own[mark.own[, 4] %in% object.wgeos[t, 4], c(5, 6, 7, 8)]
+      } else {
+        data.frame("A"=1, "B"=1, "C"=1, "D"=1)
+      }
+
+      colnames(owners.t) <- owners.cols
+      owners.df <- rbind(owners.df, owners.t)
+      msg2 <- paste("second loop number", t)
+    }
+
+    owners.df <- owners.df[-1,]
+    obj.geo.own <- cbind(object.wgeos, owners.df)
+    obj.wth <- length(colnames(obj.geo.own))
+    
+    #print("checking split markets")
+    ss.evan <- obj.geo.own[(obj.geo.own$CP4.MARKET == "Evanston" | obj.geo.own$CP4.MARKET == "South Shore"),]
+    ss.evan.rows <- rownames(ss.evan)
+    ss.evan.length <- nrow(ss.evan)
+    
+    school.table <- read.csv("D://Users/SPritchard/Music/Documents/R/zip-sort/ss.evan.owns.1H17.csv", stringsAsFactors = FALSE)
+    zip.table <- read.csv("D://Users/SPritchard/Music/Documents/R/zip-sort/zip-to-market.1H17.csv", stringsAsFactors = FALSE)
+    
+    zips <- substr(zip.table[,1], 2, 6)
+    zips <- as.numeric(zips)
+    zip.table[,1] <- zips
+    
+    new.owners <- read.csv("D://Users/SPritchard/Music/Documents/R/zip-sort/market-ownership.1H17.csv", stringsAsFactors = FALSE)
+    
+    for(k in 1:ss.evan.length){
+      msg.k <- paste0("checking split market zip ", k, " of ", ss.evan.length)
+      #print(msg.k)
+      ss.evan.k <- ss.evan[rownames(ss.evan) == ss.evan.rows[k],]
+
+      if((ss.evan.k[21] != "") & (ss.evan.k[21] %in% school.table$SCHOOL.NAME)){
+        obj.geo.own[rownames(obj.geo.own) == ss.evan.rows[k], c((obj.wth - 3):obj.wth)] <- school.table[school.table$SCHOOL.NAME == ss.evan.k[1,21],c(13:16)]
+        #print(obj.geo.own[rownames(obj.geo.own) == ss.evan.rows[k],]) 
+      } else {
+        #print("no school here")
+        ss.evan.kzips <- ss.evan.k[1, c(23:26)]
+        ss.evan.kzipsclean <- ss.evan.kzips[!is.na(ss.evan.kzips)]
+        zip.check <- ss.evan.kzipsclean[1]
+        #print(zip.check)
+        
+        zip.check <- as.character(zip.check)
+        if(!is.na(zip.check)){
+          
+          if(nchar(zip.check) <=3){
+            zip.check <- paste0("00",zip.check)
+          } else if (nchar(zip.check) == 4){
+            zip.check <- paste0("0", zip.check)
+          }
+          
+          zip.check <- as.numeric(zip.check)
+          
+          new.market <-  zip.table[zip.table[,1] == zip.check, 21 ]
+          
+          new.market <- new.market[1]
+          #print(new.market)
+          nmarket.owns <- new.owners[new.owners[,4] == new.market, c(5:8)]
+          #print(head(nmarket.owns))
+          
+          obj.geo.own[rownames(obj.geo.own) == ss.evan.rows[k], c((obj.wth - 3):obj.wth)] <- nmarket.owns
+        }
+      }
+    }
+    
+    obj.geo.own
+  }
+  
+  #END OF cols.owns2.R
+  
+  cy.fixed <- three.fix(mtd.obj, class.data.obj, st.date.priormnth, end.date.curmnth)
+  cy.append1 <- hhpart.append(cy.fixed)
+  cy.append2 <- cols.owns(cy.append1)
+  
+  cy.append2
+    
+}
+
+#END OF mtd.prep.R
+
+schcap.match <- function(cy.obj, py.obj){
+  
+  cy.allnb <- sum(cy.obj$NETBOB, na.rm = TRUE)
+  cy.miss <- cy.obj[cy.obj$SCHOOL.NAME == "",]
+  cy.miss.nb <- sum(cy.miss$NETBOB, na.rm = TRUE)
+  cy.perc.capt <- (1-cy.miss.nb/cy.allnb)
+  
+  py.allnb <- sum(py.obj$NETBOB, na.rm = TRUE)
+  py.miss <- py.obj[py.obj$SCHOOL.NAME == "",]
+  py.miss.nb <- sum(py.miss$NETBOB, na.rm = TRUE)
+  py.perc.capt <- (1-py.miss.nb/py.allnb)
+  
+  py.coef <- cy.perc.capt/py.perc.capt
+  
+  py.obj.matched <- py.obj
+  py.obj.matched$NETBOB <- (py.obj.matched$NETBOB*py.coef)
+  
+  cypy.matched <- rbind(cy.obj, py.obj.matched)
+  cypy.matched
+  
+}
+#END OF schcap.match.R
+
+nb.horiz.bars <- function(fixed.yy){
+  product.group <- character()
+  yy.len <- nrow(fixed.yy)
+  for(i in 1:yy.len){
+    prev.i <- if(fixed.yy$PROGRAM[i] %in% "PREMIER"){
+      "Premier"
+    } else {
+      "Classroom/Async"
+    } 
+    product.group <- c(product.group, prev.i)
+  } 
+  fixed.pgroup <- cbind(fixed.yy, product.group)
+  fixed.pgrouphh <- fixed.pgroup[fixed.pgroup$Include.Exclude %in% "Okay",]
+  fixed.agg <- aggregate(NETBOB ~ owner + product.group + TRANSACTION.YEAR, fixed.pgrouphh, sum)
+  fixed.agg <- fixed.agg[!(fixed.agg$owner %in% "1"),]
+
+  owner.year <- paste(fixed.agg$owner, fixed.agg$TRANSACTION.YEAR)
+  fixed.agg <- cbind(fixed.agg, owner.year)
+  fixed.agg <- fixed.agg[order(fixed.agg$owner.year),]
+
+  fixed.agg <- arrange(fixed.agg, desc(NETBOB))
+  agg.unique <- unique(fixed.agg$owner)
+
+  agg.levels <- levels(fixed.agg$owner)
+  
+  #print(paste(pages, "pages needed"))
+  for(i in 1:1){
+    st.owner <- (i-1)*12+1
+    end.owner <- (st.owner+11)
+    yy.pg <- fixed.agg[fixed.agg$owner %in% agg.unique[st.owner:end.owner],]
+
+    yy.pg <- arrange(yy.pg, desc(TRANSACTION.YEAR), desc(owner.year)) 
+    g <- ggplot(data = fixed.agg, aes(owner.year)) 
+    g <- g + geom_bar(aes(fill = product.group, weight = NETBOB), position = position_stack(reverse = TRUE)) +
+      coord_flip() + theme(legend.position = "top") + ylab("Net BoB") + xlab("BD/CRD")
+    print(g)
+  }
+}
+
+# end of nb.horiz.bars.R
+
+yy.periodtodate <- function(full.obj, cy.start.date, cy.end.date = "latest.available"){
+  
+  # Watch for monthly numbers imported as factors!
+  #1 MATCH TIMELINE OF cy.df TO py.df AND JOIN THEM
+  
+  full.obj.dates <- full.obj[full.obj$TRANSACTION.DATE != "" & full.obj$TRANSACTION.DATE != "0",]
+  full.obj.dates$TRANSACTION.DATE <- as.Date(full.obj.dates$TRANSACTION.DATE, "%m/%d/%Y")
+  
+  cy.start <- as.Date(cy.start.date, "%Y-%m-%d")
+  cy.end <- if(cy.end.date == "latest.available"){
+    max(full.obj.dates$TRANSACTION.DATE)
+  } else {
+    as.Date(cy.end.date, "%Y-%m-%d")
+  }
+  #cy.end <- max(full.obj.dates$TRANSACTION.DATE)
+  cy.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= cy.start
+                                & full.obj.dates$TRANSACTION.DATE <= cy.end,]
+  #print(head(cy.yysubset))
+  py.start <- if((cy.start - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+    cy.start - 366
+  } else {
+    cy.start - 365
+  }
+  #py.start <- (cy.start - 365)
+  py.end <- if((cy.end - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+    cy.end - 366
+  } else {
+    cy.end - 365
+  }
+  
+  #py.end <- (cy.end - 365)
+  py.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= py.start 
+                                & full.obj.dates$TRANSACTION.DATE <= py.end,]
+  cy.py.dates <- rbind(cy.yysubset, py.yysubset)
+  #cy.py.dates$TRANSACTION.DATE <- as.Date(cy.py.dates$TRANSACTION.DATE)
+  cy.py.dates
+}
+
+mqy.dates <- function(cy.df){
+  
+  # Watch for monthly numbers imported as factors!
+  
+  cy.df.dates <- cy.df[cy.df$TRANSACTION.DATE != "" & cy.df$TRANSACTION.DATE != "0",]
+  print(head(unique(cy.df.dates$TRANSACTION.DATE), 50))
+  cy.df.dates$TRANSACTION.DATE <- as.Date(cy.df.dates$TRANSACTION.DATE, "%m/%d/%Y")
+  print("line 7")
+  cy.end <- max(cy.df.dates$TRANSACTION.DATE)
+  cy.mo.num <- substr(cy.end, 6,7)
+  
+  print("line 11")
+  month.quarter.df <- data.frame(m = rep(1:12), 
+                                 q = c("01", "01", "01", "04", "04", "04", 
+                                       "07", "07", "07", "10", "10", "10"))
+  month.start <- as.Date(paste0(substr(cy.end, 1, 8),"01"), "%Y-%m-%d")
+  numeric.month <- as.numeric(substr(cy.end, 6, 7))
+  print("line 17")
+  
+  quarter.month <- month.quarter.df[numeric.month, 2]
+  quarter.start <- as.Date(paste0(substr(cy.end, 1, 5), quarter.month ,"-01"), "%Y-%m-%d")
+  print("line 21")
+  
+  year.start <- as.Date(paste0(substr(cy.end, 1, 5), "01-01"), "%Y-%m-%d")
+  
+  impt.dates <- c(cy.end, month.start, quarter.start, year.start)
+}
+
+# END OF mqy.dates.R
+
+ly.ytlastmonth.fix <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/az/ly.ytlastmonth.fix.jun17.csv", stringsAsFactors = FALSE)
+
+setwd("D://Users/SPritchard/Downloads/")
+class.data <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/PC Class Data.csv", stringsAsFactors = FALSE)
+new.mtd <- new.month("PC NetBoB Daily.xls") 
+new.mtd.fix <- mtd.prep(new.mtd, class.data, "2016-05-01", "2017-06-30")
+ly.ytd.fix <- rbind(ly.ytlastmonth.fix, new.mtd.fix) #use this obj on every future script
+
+raw.data.file.name <- paste0("D://Users/SPritchard/Downloads/raw.field.report.data", Sys.Date(),".csv")
+
+write.csv(ly.ytd.fix, raw.data.file.name, row.names = FALSE)
+
+period.start.dates <- mqy.dates(ly.ytd.fix) # vector with 4 dates: 
+            #1) latest date in data, 2) month start date, quarter start date, year start date
+
+#mtd.yy.fix <- yy.periodtodate(ly.ytd.fix, period.start.dates[2])
+
+#cy <- mtd.yy.fix[mtd.yy.fix$TRANSACTION.YEAR %in% 2017,]
+#py <- mtd.yy.fix[mtd.yy.fix$TRANSACTION.YEAR %in% 2016,]
+
+
+```
+### MTD Ranked Performance by Owner by Points
+Points system accounts for % and $ growth (% prior year x $ growth / 1000; if negative = % chg)
+```{r, echo=FALSE, fig.height=10.4, fig.width=8, warning=FALSE}
+
+mtd.yy.fix <- yy.periodtodate(ly.ytd.fix, period.start.dates[2]) 
+
+cy <- mtd.yy.fix[mtd.yy.fix$TRANSACTION.YEAR %in% 2017,]
+py <- mtd.yy.fix[mtd.yy.fix$TRANSACTION.YEAR %in% 2016,]
+
+setwd("D://Users/SPritchard/Downloads/")
+
+bd.yyperf.table <- function(cy.df2, py.df2, cy.num){
+  
+  hug.handshake.dates <- function(cy.df, py.df){
+    
+    # Watch for monthly numbers imported as factors!
+    #1 MATCH TIMELINE OF cy.df TO py.df AND JOIN THEM
+    
+    cy.df.dates <- cy.df[!(cy.df$TRANSACTION.DATE %in% ""),]
+    
+    cy.df.dates$TRANSACTION.DATE <- as.Date(cy.df.dates$TRANSACTION.DATE, "%m/%d/%Y")
+    
+    cy.start <- min(cy.df.dates$TRANSACTION.DATE, na.rm = TRUE)
+    cy.end <- max(cy.df.dates$TRANSACTION.DATE, na.rm = TRUE)
+
+    py.df.dates <- py.df[!(py.df$TRANSACTION.DATE %in% ""),]
+    py.df.dates$TRANSACTION.DATE <- as.Date(py.df.dates$TRANSACTION.DATE, "%m/%d/%Y")
+    py.start <- (cy.start - 365)
+    py.end <- (cy.end - 365)
+
+    py.yysubset <- py.df.dates[py.df.dates$TRANSACTION.DATE >= py.start 
+                               & py.df.dates$TRANSACTION.DATE <= py.end,]
+
+    cy.py.dates <- rbind(cy.df.dates, py.yysubset)
+
+    cy.py.dates
+  }
+  
+  matched.data <- hug.handshake.dates(cy.df2, py.df2)
+  matched.datahh <- matched.data[matched.data$Include.Exclude %in% "Okay",]
+  matched.datahh <- matched.datahh[!(matched.datahh$owner %in% "1"),]
+  match.agg <- aggregate(NETBOB ~ owner + TRANSACTION.YEAR, matched.datahh, sum)
+
+  match.agg
+  uniq.owners <- unique(match.agg$owner)
+
+  uniq.len <- length(uniq.owners)
+  yy.df <- data.frame("owner" = 0, "cy" = 0, "py" = 0)
+  for(i in 1:uniq.len){
+    bd.i <- uniq.owners[i]
+    bd.icy <- match.agg[(match.agg$owner %in% bd.i
+                         & match.agg$TRANSACTION.YEAR %in% cy.num), c(2:3)]
+    py.num <- (as.numeric(cy.num)-1)
+
+    bd.ipy <- match.agg[(match.agg$owner %in% bd.i
+                         & match.agg$TRANSACTION.YEAR %in% py.num), c(2:3)]
+    if(nrow(bd.icy) == 1 
+       & nrow(bd.ipy) == 1){
+      #print(paste("if = yes"))
+    
+    bd.row <- c(bd.i, bd.icy[2], bd.ipy[2])
+    bd.row.df <- as.data.frame(bd.row)
+
+    colnames(bd.row.df) <- colnames(yy.df)
+    yy.df <- rbind(yy.df, bd.row.df)
+    }
+  }
+  
+  yy.df
+  
+  yy.df <- yy.df[!(yy.df$owner %in% "0"),]
+  diff <- yy.df$cy-yy.df$py
+  
+  perc.diff <- (diff/(yy.df$py+2000)) # nullifes effect of tiny baselines on denominator
+  
+  pos.pts <- ((diff + sqrt(perc.diff)*1000)/1000) # need to fix the negative to just be based on % without weighting
+  neg.pts <- (perc.diff)*100
+  pts <- numeric()
+  for(i in 1:length(diff)){
+    pts.i <- if(perc.diff[i] >= 0){
+      pos.pts[i]
+    } else if(yy.df$py[i] < 0){
+      yy.df$cy[i]/1000 # if prior year negative, then points are cy /1000
+    } else              {
+      neg.pts[i] # $ chg is negative then points are 1+ % chg (e.g. -10% growth is -10 points)
+    }
+    pts <- c(pts, pts.i)
+  }
+  diff <- paste("$",round(diff, 0))
+  perc.diff <- paste0(round(perc.diff*100,1),"%")
+  pts <- round(pts, 1)
+
+  yy.dfpts <- cbind(yy.df, diff, perc.diff, pts)
+  yy.dfpts <- yy.dfpts[order(pts, decreasing = TRUE),]
+  #print(yy.dfpts, 15)
+  #print("minimum per month is $10k from H+H")
+  yy.dfpts
+  
+    
+}
+
+yy.match <- schcap.match(cy, py)
+
+cy2 <- yy.match[yy.match$TRANSACTION.YEAR %in% 2017,]
+py2 <- yy.match[yy.match$TRANSACTION.YEAR %in% 2016,]
+
+grid.data <- bd.yyperf.table(cy2, py2, "2017")
+  grid.data$cy <- paste("$", round(grid.data$cy,0))
+  grid.data$py <- paste("$", round(grid.data$py,0))
+colnames(grid.data) <- c("BD/CRD", "Current Year", "Prior Year", "$ Chg", "% Chg", "HH Points")
+grid.rows <- seq_len(nrow(grid.data))
+mtd.file.name <- paste0("D://Users/SPritchard/Downloads/mtd", Sys.Date(),".csv")
+write.csv(grid.data, mtd.file.name, row.names = FALSE)
+grid.table(grid.data, rows = grid.rows)
+
+```
+
+###MTD Chart of Adjusted Year over Year Net BoB by Owner
+```{r, echo=FALSE, fig.height=10.4, fig.width=8}
+mtd.yy.fix <- yy.periodtodate(ly.ytd.fix, period.start.dates[2])
+
+cy <- mtd.yy.fix[mtd.yy.fix$TRANSACTION.YEAR %in% 2017,]
+py <- mtd.yy.fix[mtd.yy.fix$TRANSACTION.YEAR %in% 2016,]
+
+yy.match <- schcap.match(cy, py)
+mtd <- nb.horiz.bars(yy.match)
+
+#mtd
+
+cy.obj <- cy2
+py.obj <- py2
+cy.allnb <- sum(cy.obj$NETBOB, na.rm = TRUE)
+cy.miss <- cy.obj[cy.obj$SCHOOL.NAME == "",]
+cy.miss.nb <- sum(cy.miss$NETBOB, na.rm = TRUE)
+cy.perc.capt <- (1-cy.miss.nb/cy.allnb)
+  
+py.allnb <- sum(py.obj$NETBOB, na.rm = TRUE)
+py.miss <- py.obj[py.obj$SCHOOL.NAME == "",]
+py.miss.nb <- sum(py.miss$NETBOB, na.rm = TRUE)
+py.perc.capt <- (1-py.miss.nb/py.allnb)
+  
+py.coef <- cy.perc.capt/py.perc.capt
+  
+py.obj.matched <- py.obj
+py.obj.matched$NETBOB <- (py.obj.matched$NETBOB*py.coef)
+
+# SET UP PRINT MESSAGES WITH SCHOOL MATCH DATA
+mtd.cy.perc.capt <- cy.perc.capt
+mtd.py.perc.capt <- py.perc.capt
+#print(paste0("% of CURRENT year Net BoB with school info = ", (round(cy.perc.capt, 3)*100), "%"))
+#print(paste0("% of PRIOR year Net BoB with school info = ", (round(py.perc.capt, 3))*100, "%"))
+#print(paste("To equalize, multiply prior year numbers by =", round(cy.perc.capt/py.perc.capt, 3)))
+#print(paste("Prior year Net BoB multiplied by coefficient.  For example a prior year transaction of", round(head(py.obj$NETBOB, 1),2), "has become", round(head(py.obj.matched$NETBOB, 1),2)))
+
+```
+
+###QTD Ranked Performance by Owner by Points
+Points system accounts for % and $ growth (% prior year x $ growth / 1000; if negative = % chg)
+```{r, echo=FALSE, fig.height=10.4, fig.width=8, warning=FALSE}
+
+qtd.yy.fix <- yy.periodtodate(ly.ytd.fix, period.start.dates[3])
+
+cy <- qtd.yy.fix[qtd.yy.fix$TRANSACTION.YEAR %in% 2017,]
+py <- qtd.yy.fix[qtd.yy.fix$TRANSACTION.YEAR %in% 2016,]
+
+yy.match <- schcap.match(cy, py)
+
+cy2 <- yy.match[yy.match$TRANSACTION.YEAR %in% 2017,]
+py2 <- yy.match[yy.match$TRANSACTION.YEAR %in% 2016,]
+
+grid.data <- bd.yyperf.table(cy2, py2, "2017")
+  grid.data$cy <- paste("$", round(grid.data$cy,0))
+  grid.data$py <- paste("$", round(grid.data$py,0))
+colnames(grid.data) <- c("BD/CRD", "Current Year", "Prior Year", "$ Chg", "% Chg", "HH Points")
+grid.rows <- seq_len(nrow(grid.data))
+qtd.file.name <- paste0("D://Users/SPritchard/Downloads/qtd", Sys.Date(),".csv")
+write.csv(grid.data, qtd.file.name, row.names = FALSE)
+grid.table(grid.data, rows = grid.rows)
+```
+
+### QTD Chart of Adjusted Year over Year Net BoB by Owner
+```{r, echo=FALSE, fig.height=10.4, fig.width=8}
+# yy.match is now from qtd above
+
+qtd <- nb.horiz.bars(yy.match)
+
+#qtd
+
+cy.obj <- cy2
+py.obj <- py2
+cy.allnb <- sum(cy.obj$NETBOB, na.rm = TRUE)
+cy.miss <- cy.obj[cy.obj$SCHOOL.NAME == "",]
+cy.miss.nb <- sum(cy.miss$NETBOB, na.rm = TRUE)
+cy.perc.capt <- (1-cy.miss.nb/cy.allnb)
+  
+py.allnb <- sum(py.obj$NETBOB, na.rm = TRUE)
+py.miss <- py.obj[py.obj$SCHOOL.NAME == "",]
+py.miss.nb <- sum(py.miss$NETBOB, na.rm = TRUE)
+py.perc.capt <- (1-py.miss.nb/py.allnb)
+  
+py.coef <- cy.perc.capt/py.perc.capt
+  
+py.obj.matched <- py.obj
+py.obj.matched$NETBOB <- (py.obj.matched$NETBOB*py.coef)
+  
+# SET UP PRINT MESSAGES WITH SCHOOL MATCH DATA
+
+qtd.cy.perc.capt <- cy.perc.capt
+qtd.py.perc.capt <- py.perc.capt
+#print(paste0("% of CURRENT year Net BoB with school info = ", (round(cy.perc.capt, 3)*100), "%"))
+#print(paste0("% of PRIOR year Net BoB with school info = ", (round(py.perc.capt, 3))*100, "%"))
+#print(paste("To equalize, multiply prior year numbers by =", round(cy.perc.capt/py.perc.capt, 3)))
+#print(paste("Prior year Net BoB multiplied by coefficient.  For example a prior year transaction of", round(head(py.obj$NETBOB, 1),2), "has become", round(head(py.obj.matched$NETBOB, 1),2)))
+```
+
+### YTD Ranked Performance by Owner by Points
+Points system accounts for % and $ growth (% prior year x $ growth / 1000; if negative = % chg)
+```{r, echo=FALSE, fig.height=10.4, fig.width=8, warning=FALSE}
+ytd.yy.fix <- yy.periodtodate(ly.ytd.fix, period.start.dates[4])
+
+cy <- ytd.yy.fix[ytd.yy.fix$TRANSACTION.YEAR %in% 2017,]
+py <- ytd.yy.fix[ytd.yy.fix$TRANSACTION.YEAR %in% 2016,]
+
+yy.match <- schcap.match(cy, py)
+
+cy2 <- yy.match[yy.match$TRANSACTION.YEAR %in% 2017,]
+py2 <- yy.match[yy.match$TRANSACTION.YEAR %in% 2016,]
+
+grid.data <- bd.yyperf.table(cy2, py2, "2017")
+  grid.data$cy <- paste("$", round(grid.data$cy,0))
+  grid.data$py <- paste("$", round(grid.data$py,0))
+colnames(grid.data) <- c("BD/CRD", "Current Year", "Prior Year", "$ Chg", "% Chg", "HH Points")
+grid.rows <- seq_len(nrow(grid.data))
+ytd.file.name <- paste0("D://Users/SPritchard/Downloads/ytd", Sys.Date(),".csv")
+write.csv(grid.data, ytd.file.name, row.names = FALSE)
+grid.table(grid.data, rows = grid.rows)
+```
+
+### YTD Chart of Adjusted Year over Year Net BoB by Owner
+
+```{r, echo=FALSE, fig.height=10.4, fig.width=8}
+# yy.match is now from ytd above
+
+ytd <- nb.horiz.bars(yy.match)
+
+#ytd
+
+cy.obj <- cy2
+py.obj <- py2
+cy.allnb <- sum(cy.obj$NETBOB, na.rm = TRUE)
+cy.miss <- cy.obj[cy.obj$SCHOOL.NAME == "",]
+cy.miss.nb <- sum(cy.miss$NETBOB, na.rm = TRUE)
+cy.perc.capt <- (1-cy.miss.nb/cy.allnb)
+  
+py.allnb <- sum(py.obj$NETBOB, na.rm = TRUE)
+py.miss <- py.obj[py.obj$SCHOOL.NAME == "",]
+py.miss.nb <- sum(py.miss$NETBOB, na.rm = TRUE)
+py.perc.capt <- (1-py.miss.nb/py.allnb)
+  
+py.coef <- cy.perc.capt/py.perc.capt
+  
+py.obj.matched <- py.obj
+py.obj.matched$NETBOB <- (py.obj.matched$NETBOB*py.coef)
+
+# SET UP PRINT MESSAGES WITH SCHOOL MATCH DATA
+print("Month To Date School Name Capture Info:")  
+
+print(paste0("% of CURRENT year Net BoB with school info = ", (round(mtd.cy.perc.capt, 3)*100), "% vs." ,(round(mtd.py.perc.capt, 3))*100, "% PRIOR year"))
+
+#print(paste0("% of CURRENT year Net BoB with school info = ", (round(mtd.cy.perc.capt, 3)*100), "%"))
+#print(paste0("% of PRIOR year Net BoB with school info = ", (round(mtd.py.perc.capt, 3))*100, "%"))
+#print(paste("To equalize, multiply prior year numbers by =", round(mtd.cy.perc.capt/mtd.py.perc.capt, 3)))
+
+print("Quarter To Date School Name Capture Info:")  
+print(paste0("% of CURRENT year Net BoB with school info = ", (round(qtd.cy.perc.capt, 3)*100), "% vs." ,(round(qtd.py.perc.capt, 3))*100, "% PRIOR year"))
+#print(paste0("% of PRIOR year Net BoB with school info = ", (round(qtd.py.perc.capt, 3))*100, "%"))
+#print(paste("To equalize, multiply prior year numbers by =", round(qtd.cy.perc.capt/qtd.py.perc.capt, 3)))
+
+print("Year To Date School Name Capture Info:")  
+
+print(paste0("% of CURRENT year Net BoB with school info = ", (round(cy.perc.capt, 3)*100), "% vs." ,(round(py.perc.capt, 3))*100, "% PRIOR year"))
+
+#print(paste0("% of PRIOR year Net BoB with school info = ", (round(py.perc.capt, 3))*100, "%"))
+#print(paste("To equalize, multiply prior year numbers by =", round(cy.perc.capt/py.perc.capt, 3)))
+#print(paste("Prior year Net BoB multiplied by coefficient.  For example a prior year transaction of", round(head(py.obj$NETBOB, 1),2), "has become", round(head(py.obj.matched$NETBOB, 1),2)))
+#print(unique(yy.match$TRANSACTION.DATE))
+
+print(paste("Data included through", period.start.dates[1]))
+
+print(paste("Report run at", date()))
+
+```

@@ -1,0 +1,1166 @@
+---
+title: "Premier Dashboard"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#######
+cy.start2 <- "2017-08-01"
+tutoring.per.call.agent.filename <- "NXT Sales through 2017-08-30.xlsx"
+
+#######
+
+library(ggplot2)
+library(scales)
+
+pcnetbob.download <- function(){
+    library(gmailr)
+    gmail_auth(scope = c("read_only", "modify", "compose", "full"))
+    msgs <- messages(search = "to:sam.pritchard@kaplan.com", label_ids = "Label_19",num_results = 1)
+    if(length(msgs[[1]])>1){
+      msg <- message(msgs[[1]][[1]][[1]]$id )
+      #print(msg)
+      save_attachments(msg, path = "D://Users/SPritchard/Downloads")
+      
+      modify_message(msg$id, remove_labels = "Label_19") # removes label 'New PC NetBoB'
+      modify_message(msg$id, remove_labels = "UNREAD")
+      #print("New file downloaded")
+    } else {
+      #print("Nothing with 'New PC NetBoB' label to download")
+    }
+  }
+
+yy.periodtodate <- function(full.obj, cy.start.date, cy.end.date = "latest.available"){
+  full.obj.dates <- full.obj
+  # Watch for monthly numbers imported as factors!
+  #1 MATCH TIMELINE OF cy.df TO py.df AND JOIN THEM
+#  print("line 7")
+  #full.obj.dates <- full.obj[full.obj$TRANSACTION.DATE != "" & full.obj$TRANSACTION.DATE != "0",]
+  #full.obj.dates <- full.obj
+#  print("line 9")
+  full.obj.dates$TRANSACTION.DATE <- as.Date(full.obj.dates$TRANSACTION.DATE, "%m/%d/%Y")
+  
+#  print("line 11")
+  
+  cy.start <- as.Date(cy.start.date, "%Y-%m-%d")
+  cy.end <- if(cy.end.date == "latest.available"){
+    max(full.obj.dates$TRANSACTION.DATE, na.rm = TRUE)
+  } else {
+    as.Date(cy.end.date, "%Y-%m-%d")
+  }
+  #cy.end <- max(full.obj.dates$TRANSACTION.DATE)
+  cy.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= cy.start
+                                & full.obj.dates$TRANSACTION.DATE <= cy.end,]
+  #print(head(cy.yysubset))
+  py.start <- if((cy.start - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+    cy.start - 366
+  } else {
+    cy.start - 365
+  }
+  #py.start <- (cy.start - 365)
+  py.end <- if((cy.end - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+    cy.end - 366
+  } else {
+    cy.end - 365
+  }
+  
+  #py.end <- (cy.end - 365)
+  py.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= py.start 
+                                & full.obj.dates$TRANSACTION.DATE <= py.end,]
+  #print(head(py.yysubset))
+  #print(tail(py.yysubset))
+  cy.py.dates <- rbind(cy.yysubset, py.yysubset)
+  #cy.py.dates$TRANSACTION.DATE <- as.Date(cy.py.dates$TRANSACTION.DATE)
+  cy.py.dates <- cy.py.dates[(!is.na(cy.py.dates$NETBOB)), ]
+  cy.py.dates
+}
+
+yy.periodtodate.eom <- function(full.obj, cy.start.date, cy.end.date = "latest.available"){
+  
+  full.obj.dates <- full.obj
+  full.obj.dates$TRANSACTION.DATE <- as.Date(full.obj.dates$TRANSACTION.DATE, "%m/%d/%Y")
+  
+  cy.start <- as.Date(cy.start.date, "%Y-%m-%d")
+  cy.end <- if(cy.end.date == "latest.available"){
+    max(full.obj.dates$TRANSACTION.DATE, na.rm = TRUE)
+  } else {
+    as.Date(cy.end.date, "%Y-%m-%d")
+  }
+  #cy.end <- max(full.obj.dates$TRANSACTION.DATE)
+  cy.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= cy.start
+                                & full.obj.dates$TRANSACTION.DATE <= cy.end,]
+#  print(head(cy.yysubset))
+  py.start <- if((cy.start - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+    cy.start - 366
+  } else {
+    cy.start - 365
+  }
+  #py.start <- (cy.start - 365)
+  cy.year.char <- substr(cy.start.date, 1, 4)
+# print(cy.year.char)
+  cy.year <- as.numeric(cy.year.char)
+  py.year <- (cy.year-1)
+  #py.year <- as.character(py.year)
+#  print(py.year)
+  py.month <- months.Date(cy.end)
+  py.month <- toupper(py.month)
+#  print(py.month)
+#  print(head(full.obj.dates, 3))
+  library(stringr)
+  full.obj.dates$TRANSACTION.MONTH <- str_trim(full.obj.dates$TRANSACTION.MONTH)
+  py.sub <- full.obj.dates[full.obj.dates$TRANSACTION.MONTH %in% py.month
+                           & full.obj.dates$TRANSACTION.YEAR %in% py.year,]
+  
+#  print(paste("class of TRANSACTION.MONTH", class(full.obj.dates$TRANSACTION.MONTH)))
+# print(paste("class of TRANSACTION.YEAR", class(full.obj.dates$TRANSACTION.YEAR)))  
+#  print(head(py.sub))
+  py.end <- max(py.sub$TRANSACTION.DATE, na.rm = TRUE)
+#  print(py.end)
+  #py.end <- (cy.end - 365)
+  py.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= py.start 
+                                & full.obj.dates$TRANSACTION.DATE <= py.end,]
+  cy.py.dates <- rbind(cy.yysubset, py.yysubset)
+  #cy.py.dates$TRANSACTION.DATE <- as.Date(cy.py.dates$TRANSACTION.DATE)
+  cy.py.dates <- cy.py.dates[(!is.na(cy.py.dates$NETBOB)), ]
+#  print(head(cy.py.dates))
+  cy.py.dates
+  
+}
+
+new.month <- function(downloads.name) {
+  library(xlsx)
+  full.path <- paste0("D://Users/SPritchard/Downloads/",downloads.name)
+  month.data <- read.xlsx2(full.path, sheetIndex = 1, colIndex = c(1:39), startRow = 2, 
+                          colClasses = c(rep("character", 4), "numeric", rep("character", 2), 
+                                         "numeric", rep("character", 6), rep("numeric", 4),  
+                                         rep("character", 4), rep("numeric", 6), rep("character", 6), 
+                                         "numeric", rep("character", 4)), stringsAsFactors = FALSE)
+  message <- paste(downloads.name, "has been read in and dim equal") 
+  #print(message)
+  #print(dim(month.data))
+  month.data
+
+}
+
+mtd.prep <- function(mtd.obj, class.data.obj, st.date.priormnth, end.date.curmnth){
+  
+  three.fix <- function(df.to.fix, class.data.object, start.date, end.date){
+    
+    #READ IN email.glean.R (inside three.fix.R)
+    
+    email.glean <- function(df.to.fix) {
+      df.f <- df.to.fix
+      df.len <- nrow(df.f)
+      df.col.names <- colnames(df.f)
+      if(df.col.names[36] != "EMAIL1"){
+        #print("ERROR: Column 36 not EMAIL1 in input")
+      }
+      split.addr <- strsplit(df.f[,36], "@")
+      doms <- character(length = 0)
+      for(i in 1:df.len){
+        dom.i <- split.addr[[i]][2]
+        doms <- c(doms, dom.i)
+        
+      }
+      #print("domains extracted")
+      df.wdoms <- cbind(df.f, doms)
+      #print(head(df.wdoms, 1))
+      
+      
+      sch.emails <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/emaildoms.schools2.csv", stringsAsFactors = FALSE)
+      col.sch.emails <- colnames(sch.emails)
+      sch.emails.rows <- nrow(sch.emails)
+      all.doms <- sch.emails[,3]
+      #print(class(all.doms))
+      #print(colnames(sch.emails))
+      
+      #fixed.enrolls <- vector(mode = "character", length = 39)
+      for(t in 1:sch.emails.rows){
+        df.f.t <- df.wdoms[df.wdoms$doms %in% all.doms[t],]
+        msg.t <- paste0("checking email for row ", t, " of ", sch.emails.rows)
+        #print(msg.t)
+        #print("This One")
+        #print(head(df.wdoms[df.wdoms$doms,]))
+        #print("Must Equal This One")
+        #print(all.doms[t])
+        #print("df.f.t dim equals")
+        #print(dim(df.f.t))
+        t.name <- row.names(df.f.t)
+        #print("t.name equals")
+        #print(t.name)
+        
+        #print("df.f dim equals")
+        #print(dim(df.f))
+        #print(head(df.f, 2))
+        
+        if(nrow(df.f.t) >=1) {
+          for(q in 1:nrow(df.f.t)){
+            if(df.f.t[q,21] == ""){
+              df.f.t[q,21] <- sch.emails[t, 4]
+            }
+          }
+          
+        } #&& (is.na(df.f.t[,21]))) #| df.f.t[,21] == "Unknown")) 
+        #{ df.f.t[,21] <- sch.emails[t, 4]} #insert new school
+        
+        #i.hier <- market.hier[market.hier$MARKET_NAME == adjusts[i, 40],]
+        
+        #df.f.i[,c(1,2,3)] <- i.hier[,c(1,2,3)] # aligns territory, region & market group with new market
+        
+        #if(nrow(df.f.i) >= 1) { df.f.i[,21] <- adjusts[i, 41]} #school
+        #print(df.f.t)
+        if(nrow(df.f.t) >=1) {
+          for(q in 1:nrow(df.f.t)){
+            df.wdoms[rownames(df.wdoms) == t.name[q],] <- df.f.t[q,]
+          }
+        }
+        #print(t)
+        #print(df.f.t)
+      }
+      df.wdoms
+    }
+    # END OF email.glean.R (inside three.fix.R)
+    
+    #READ IN priv.venue.fix2.R (inside three.fix.R)
+    
+    priv.venue.fix2 <- function(df.to.fix, now.class.object, start.date, end.date){
+      
+      all.netbob <- sum(df.to.fix$NETBOB)
+      #print(paste("all net bob equals", all.netbob))
+      missing.r1 <- df.to.fix[df.to.fix$SCHOOL.NAME == "",]
+      missing.nb1 <- sum(missing.r1[,27])
+      #print(paste("all net bob equals", all.netbob))
+      #print(paste("missing net bob equals", missing.nb1))
+      
+      now.class.object[,15] <- as.Date(now.class.object[,15], "%m/%d/%Y")
+      sdate <- as.Date(start.date)
+      edate <- as.Date(end.date)
+      now.class.short <- now.class.object[now.class.object$Enrollment.Date >= sdate & now.class.object$Enrollment.Date <= edate ,]
+      
+      
+      pri.vens <- read.csv("D://USers/SPritchard/Music/Documents/R/net-bob-scripts/private-class-venues.csv", stringsAsFactors = FALSE)
+      
+      classobj.ids <- now.class.short[now.class.short$Market %in% pri.vens$facility.market 
+                                      & now.class.short$Facility %in% pri.vens$facility, ]
+      pri.ids.sch <- merge(classobj.ids, pri.vens, by.x = "Facility", by.y = "facility", all.y = FALSE)
+      #pri.narrow <- pri.ids[,c(8,10,12,13,14,15)]
+      
+      
+      
+      #print(head(classobj.ids))
+      #print(head(pri.ids.sch))
+      
+      df.f <- df.to.fix
+      df.col.names <- colnames(df.f)
+      adjusts <- pri.ids.sch
+      adjust.rows <- nrow(adjusts)
+      adjusts.ids <- adjusts[,12]
+      market.hier <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/market.hierarchy.csv", stringsAsFactors = FALSE)
+      #print(head(adjusts.ids))
+      fixed.enrolls <- vector(mode = "character", length = 22)
+      for(i in 1:adjust.rows){
+        df.f.i <- df.f[df.f$ENROLLMENT.ID %in% adjusts.ids[i],]
+        
+        msg.i <- paste0("Checking EID ", i, " of ", adjust.rows, " in private class venues")
+        #print(msg.i)
+        
+        #print("df.f.i dim equals")
+        #print(dim(df.f.i))
+        #print(paste("i equals", i))
+        i.name <- row.names(df.f.i)
+        #print(i.name)
+        #print(paste("df.f dim equals", dim(df.f)))
+        #print(head(df.f, 2))
+        
+        if(nrow(df.f.i) >= 1) { df.f.i[,4] <- adjusts[i, 25]} #market
+        
+        i.hier <- market.hier[market.hier$MARKET_NAME == adjusts[i, 25],]
+        #print(adjusts[i, 25])
+        #print(i.hier)
+        df.f.i[,c(1,2,3)] <- i.hier[,c(1,2,3)] # aligns territory, region & market group with new market
+        
+        if(nrow(df.f.i) >= 1) { df.f.i[,21] <- adjusts[i, 24]} #school
+        #print(df.f.i)
+        df.f.i <- df.f.i[1,] #first row only in case of mult entries with EID such as drop switch
+        df.f[rownames(df.f) == i.name,] <- df.f.i
+        #print(i)
+        #print(df.f.i)
+      }
+      #print(paste("all net bob equals", all.netbob))
+      #print(paste("missing net bob equals", missing.nb1))
+      
+      missing.r2 <- df.f[df.f$SCHOOL.NAME == "",]
+      #print(colnames(df.f))
+      missing.nb2 <- sum(missing.r2[,27])
+      #print(paste("missing net bob after priv.venue.fix2 equals", missing.nb2))
+      perc.miss1 <- (missing.nb1/all.netbob)
+      perc.miss2 <- (missing.nb2/all.netbob)
+      #print(paste0("% of Net Bob missing school in input = ", (round(perc.miss1, 3)*100), "%"))
+      
+      #print(paste0("% of Net Bob missing school in OUTPUT = ", (round(perc.miss2, 3))*100, "%"))
+      #print(paste("Additional Net Bob assigned school name =", round(missing.nb1-missing.nb2)))
+      df.f
+      
+      #print(head(now.class.short))
+    }
+    
+    # END OF READ IN priv.venue.fix2.R (inside three.fix.R)
+    
+    # READ IN dupe.schools.R (inside three.fix.R)
+    
+    dupe.schools <- function(df.to.fix){
+      dfs <- df.to.fix
+      dschools.tbl <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/dupe.schools.csv", stringsAsFactors = FALSE)
+      #print("dupe table read in")
+      dfs.rows <- nrow(dfs)
+      #print(dfs.rows)
+      for(p in 1:dfs.rows){
+        #print(paste0("Checking for dupes in row ", p, " of ", dfs.rows))
+        if(dfs$SCHOOL.NAME[p] %in% dschools.tbl$Duplicate.Name ){
+          dupe.row <- dschools.tbl[dschools.tbl$Duplicate.Name == dfs$SCHOOL.NAME[p],]
+          if(dfs$CP4.MARKET[p] == dupe.row[1,1]){
+            dfs$SCHOOL.NAME[p] <- dupe.row[1,3]  
+          }
+          
+        }
+      }
+      dfs
+    }
+    
+    # END OF READ IN dupe.schools.R (inside three.fix.R)
+    
+    # USE FUNCTIONS (inside three.fix.R)
+    
+    df.gleaned <- email.glean(df.to.fix)
+    
+    df.priv <- priv.venue.fix2(df.gleaned, class.data.object, start.date, end.date )
+    
+    df.unduped <- dupe.schools(df.priv)
+    
+    missing.r1 <- df.to.fix[df.to.fix$SCHOOL.NAME == "",]
+    missing.nb1 <- sum(missing.r1$NETBOB, na.rm = TRUE)
+    
+    missing.r2 <- df.unduped[df.unduped$SCHOOL.NAME == "",]
+    missing.nb2 <- sum(missing.r2$NETBOB, na.rm = TRUE)
+    all.netbob <- sum(df.to.fix$NETBOB, na.rm = TRUE)
+    
+    perc.miss1 <- (missing.nb1/all.netbob)
+    perc.miss2 <- (missing.nb2/all.netbob)
+    #print(paste0("% of Net Bob missing school in input = ", (round(perc.miss1, 3)*100), "%"))
+    
+    #print(paste0("% of Net Bob missing school in OUTPUT = ", (round(perc.miss2, 3))*100, "%"))
+    #print(paste("Additional Net Bob assigned school name =", round(missing.nb1-missing.nb2)))
+    
+    df.unduped
+  }
+  # END OF three.fix.R
+  
+  # Purpose: adds HHW category and whether to include or exclude as a partner school
+  # Next step 2: instead of NA schools not on the list or blank should be "Unknown"
+  # has an extra row of zeros at top which can be removed
+  
+  hhpart.append <- function(df.append){
+    #1 import filter file
+    #2 add hug, handshake, Wave, Unknown, and Exclude, Okay to df.append
+    #3 intermediate step of keepiing original doc
+    hh.list <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/hh.partners.csv", stringsAsFactors = FALSE)
+    df.length <- nrow(df.append)
+    df.width <- length(colnames(df.append))
+    matrix1 <- matrix(0, ncol = (df.width+2))
+    df.new <- as.data.frame(matrix1)
+    #print(dim(df.new))
+    for(i in 1:df.length){
+      i.msg <- paste0("adding categories to row ", i, " of ", df.length)
+      #print(i.msg)
+      df.i <- df.append[i,]
+      #print(df.i)
+      #print(head(hh.list[,2]))
+      #print(df.append$SCHOOL.NAME[i])
+      df.i.cats <- hh.list[hh.list[,2] %in% df.append$SCHOOL.NAME[i],c(1,2,3,4)]
+      if(nrow(df.i.cats)==0){
+        df.i.cats2 <- rep(0, 2)
+      } else if(nrow(df.i.cats)>=2){
+        df.i.cats2 <- hh.list[hh.list[,1] %in% df.i.cats[,1],]
+        df.i.cats2 <- df.i.cats2[1,]
+      } else if(nrow(df.i.cats)==1){
+        df.i.cats2 <- df.i.cats
+      }
+      #print(df.i.cats)
+      #print(nrow(df.i.cats))
+      #print(dim(df.i.cats))
+      #print("cats2 =")
+      #print(df.i.cats2)
+      
+      df.i.append <- c(df.i, df.i.cats2[c(3:4)])
+      df.i.df <- as.data.frame(df.i.append)
+      
+      cnames <- colnames(df.i.df)
+      cname.len <- length(cnames)
+      
+      cnames[c((cname.len - 1),(cname.len))] <- c("Category", "Include.Exclude") # IF DOMS COL ADDED, MAYBE USE cnames[c(41,42)] <- c("Category", "Include.Exclude")
+      colnames(df.i.df) <- cnames
+      colnames(df.new) <- colnames(df.i.df)
+      df.new <- rbind(df.new, df.i.df)
+      
+    }
+    df.new
+  }
+  
+  #END OF hhpart.append.R
+  
+  cols.owns <- function(object, market.column){
+    
+    object.width <- length(colnames(object))
+    
+    mark.own <- read.csv("D://Users/SPritchard/Music/Documents/R/zip-sort/market-ownership-old.csv", stringsAsFactors = FALSE)
+    
+    object.wgeos <- object
+    market.col <- object.width
+    
+    owners.df <- data.frame("bd" = 0, "crd" = 0, "owner" = 0, "rd" = 0)
+    owners.cols <- colnames(owners.df)
+    vec.len <- nrow(object.wgeos)
+    #print(head(mark.own, 4))
+    for(t in 1:vec.len){
+      msg.t <- paste0("adding owners to row ", t, " of ", vec.len)
+      #print(msg.t)
+      owners.t <- if(nrow(mark.own[mark.own[, 4] %in% object.wgeos[t, 4], c(5, 6, 7, 8)])>=1){
+        mark.own[mark.own[, 4] %in% object.wgeos[t, 4], c(5, 6, 7, 8)]
+      } else {
+        data.frame("A"=1, "B"=1, "C"=1, "D"=1)
+      }
+      owners.t <- owners.t[1,]
+      #print(head(mark.own[,4]))
+      #print(object.wgeos[t, market.col])
+      #print(owners.t)
+      colnames(owners.t) <- owners.cols
+      owners.df <- rbind(owners.df, owners.t)
+      msg2 <- paste("second loop number", t)
+      #print(msg2)
+    }
+    #print("loop 2 complete")
+    owners.df <- owners.df[-1,]
+    #print(head(object.wgeos))
+    #print(tail(object.wgeos))
+    #print(head(owners.df))
+    #print(tail(owners.df))
+    
+    obj.geo.own <- cbind(object.wgeos, owners.df)
+    #print("do we get this far?")
+    obj.wth <- length(colnames(obj.geo.own))
+    
+    #print("checking split markets")
+    ss.evan <- obj.geo.own[(obj.geo.own$CP4.MARKET == "North LA" 
+                            | obj.geo.own$CP4.MARKET == "South Shore")
+                           | obj.geo.own$CP4.MARKET == "Downers Grove (East)" ,]
+    ss.evan.rows <- rownames(ss.evan)
+    ss.evan.length <- nrow(ss.evan)
+    
+    school.table <- read.csv("D://Users/SPritchard/Music/Documents/R/zip-sort/ss.evan.owns.csv", stringsAsFactors = FALSE)
+    zip.table <- read.csv("D://Users/SPritchard/Music/Documents/R/zip-sort/zip-to-market.csv", stringsAsFactors = FALSE)
+    
+    zips <- substr(zip.table[,1], 2, 6)
+    zips <- as.numeric(zips)
+    zip.table[,1] <- zips
+    
+    new.owners <- read.csv("D://Users/SPritchard/Music/Documents/R/zip-sort/market-ownership.csv", stringsAsFactors = FALSE)
+    
+    for(k in 1:ss.evan.length){
+      msg.k <- paste0("checking split market zip ", k, " of ", ss.evan.length)
+      #print(msg.k)
+      ss.evan.k <- ss.evan[rownames(ss.evan) == ss.evan.rows[k],]
+      #print(paste("k =", k))
+      #print(class(ss.evan.k))
+      #print(dim(ss.evan.k))
+      #print(head(ss.evan.k))
+      #print(ss.evan.k)
+      #print(ss.evan.k[21] != "")
+      #print(ss.evan.k[21] %in% school.table$SCHOOL.NAME)
+      
+      #print(nrow(school.table[school.table$SCHOOL.NAME %in% ss.evan.k[21],]))
+      if((ss.evan.k[21] != "") & (ss.evan.k[21] %in% school.table$SCHOOL.NAME)){
+        obj.geo.own[rownames(obj.geo.own) == ss.evan.rows[k], c((obj.wth - 3):obj.wth)] <- school.table[school.table$SCHOOL.NAME == ss.evan.k[1,21],c(13:16)]
+        #print(obj.geo.own[rownames(obj.geo.own) == ss.evan.rows[k],]) 
+      } else {
+        #print("no school here")
+        ss.evan.kzips <- ss.evan.k[1, c(23:26)]
+        ss.evan.kzipsclean <- ss.evan.kzips[!is.na(ss.evan.kzips)]
+        zip.check <- ss.evan.kzipsclean[1]
+        #print(zip.check)
+        
+        
+        zip.check <- as.character(zip.check)
+        if(!is.na(zip.check)){
+          
+          if(nchar(zip.check) <=3){
+            zip.check <- paste0("00",zip.check)
+          } else if (nchar(zip.check) == 4){
+            zip.check <- paste0("0", zip.check)
+          }
+          
+          zip.check <- as.numeric(zip.check)
+          #print(zip.check)
+          
+          #print(head(zip.table, 2))
+          
+          new.market <-  zip.table[zip.table[,1] == zip.check, 21 ]
+          
+          new.market <- new.market[1]
+          #print(new.market)
+          nmarket.owns <- new.owners[new.owners[,4] == new.market, c(5:8)]
+          #print(head(nmarket.owns))
+          
+          obj.geo.own[rownames(obj.geo.own) == ss.evan.rows[k], c((obj.wth - 3):obj.wth)] <- nmarket.owns
+        }
+      }
+    }
+    
+    obj.geo.own
+  }
+  
+  #END OF cols.owns2.R
+  
+  cy.fixed <- three.fix(mtd.obj, class.data.obj, st.date.priormnth, end.date.curmnth)
+  cy.append1 <- hhpart.append(cy.fixed)
+  cy.append2 <- cols.owns(cy.append1)
+  
+  cy.append2
+  
+}
+
+premier.calendar.group.bar <- function(prepped.df, day.digits = 2){
+  # day.digits provides the ability to choose whether to list calendar days as "01/31" or just "31"
+  # 2 digits display better, but would create problems if looking at more than 1 month
+  # acceptable levels would be 2 (day only), 5 (month and day), or 10 (full date)
+  
+  library(ggplot2)
+  prepped.df <- prepped.df[prepped.df$PROGRAM %in% "PREMIER",]
+  day.digits.vec <- c(2, 5, 10)
+  substr.start <- c(9, 6, 1)
+  substr.end <- c(10, 10, 10)
+  digit.df <- data.frame(day.digits.vec, substr.start, substr.end)
+  month.day <- substr(prepped.df$TRANSACTION.DATE, digit.df[digit.df$day.digits.vec %in% day.digits, 2]
+                      , digit.df[digit.df$day.digits.vec %in% day.digits, 3])
+  prepped.df2 <- cbind(prepped.df, month.day)
+  yy.agg <- aggregate(NETBOB ~ TRANSACTION.YEAR + month.day, prepped.df2, sum)
+  colnames(yy.agg)[1] <- "YEAR"
+#  print(head(yy.agg))
+  yy.agg$YEAR <- as.factor(yy.agg$YEAR)
+  library(scales)
+  g <- ggplot(yy.agg, aes(fill = YEAR, x = month.day, y = NETBOB))
+  g <- g + geom_bar(position = "dodge", stat = "identity") + scale_y_continuous(labels = scales::comma)
+  print(g)
+}
+
+yy.netbob <- function(prepped.df, thismonth.start.date){
+  budget.prior <- read.csv("D://Users/SPritchard/Music/Documents/R/premier/budget17.csv", stringsAsFactors = FALSE)
+
+  thismonth.month.num <- substr(thismonth.start.date, 6, 7)
+  month.table <- data.frame(abbrev = c("01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"), 
+                            trans.month = c("JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", 
+                                            "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"))
+  month.in.data <- month.table[month.table$abbrev %in% thismonth.month.num, 2]
+  #premier.month <- premier.df[premier.df$TRANSACTION.MONTH %in% month.in.data,]
+  
+  thismonth.nums <- budget.prior[budget.prior$month %in% month.in.data, 2:3]
+#  print(thismonth.month.num)
+  
+  yy.periodtodate <- function(full.obj, cy.start.date, cy.end.date = "latest.available"){
+    full.obj.dates <- full.obj
+    # Watch for monthly numbers imported as factors!
+    #1 MATCH TIMELINE OF cy.df TO py.df AND JOIN THEM
+#    print("line 7")
+    #full.obj.dates <- full.obj[full.obj$TRANSACTION.DATE != "" & full.obj$TRANSACTION.DATE != "0",]
+    #full.obj.dates <- full.obj
+#    print("line 9")
+    full.obj.dates$TRANSACTION.DATE <- as.Date(full.obj.dates$TRANSACTION.DATE, "%m/%d/%Y")
+    
+#    print("line 11")
+    
+    cy.start <- as.Date(cy.start.date, "%Y-%m-%d")
+    cy.end <- if(cy.end.date == "latest.available"){
+      max(full.obj.dates$TRANSACTION.DATE, na.rm = TRUE)
+    } else {
+      as.Date(cy.end.date, "%Y-%m-%d")
+    }
+    #cy.end <- max(full.obj.dates$TRANSACTION.DATE)
+    cy.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= cy.start
+                                  & full.obj.dates$TRANSACTION.DATE <= cy.end,]
+    #print(head(cy.yysubset))
+    py.start <- if((cy.start - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+      cy.start - 366
+    } else {
+      cy.start - 365
+    }
+    #py.start <- (cy.start - 365)
+    py.end <- if((cy.end - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+      cy.end - 366
+    } else {
+      cy.end - 365
+    }
+    
+    #py.end <- (cy.end - 365)
+    py.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= py.start 
+                                  & full.obj.dates$TRANSACTION.DATE <= py.end,]
+    #print(head(py.yysubset))
+    #print(tail(py.yysubset))
+    cy.py.dates <- rbind(cy.yysubset, py.yysubset)
+    #cy.py.dates$TRANSACTION.DATE <- as.Date(cy.py.dates$TRANSACTION.DATE)
+    cy.py.dates <- cy.py.dates[(!is.na(cy.py.dates$NETBOB)), ]
+    cy.py.dates
+  }
+  
+  yy.obj <- yy.periodtodate(prepped.df, thismonth.start.date)
+  
+#  print(thismonth.nums)
+  #print(head(prepped.df,2))
+  premier.df <- yy.obj[yy.obj$PROGRAM %in% "PREMIER",]
+  #print(head(premier.df, 3))
+  #month.table <- data.frame(abbrev = c("01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"), 
+  #                          trans.month = c("JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"))
+  #month.in.data <- month.table[month.table$abbrev %in% thismonth, 2]
+  #premier.month <- premier.df[premier.df$TRANSACTION.MONTH %in% month.in.data,]
+  
+
+  cy <- premier.df[premier.df$TRANSACTION.YEAR %in% 2017,]
+  cy.sum <- sum(cy$NETBOB)
+  
+  py <- premier.df[premier.df$TRANSACTION.YEAR %in% 2016,]
+  py.sum <- sum(py$NETBOB)
+  
+  full.month.projected <- ((cy.sum[1] - py.sum[1])/py.sum[1]+1)*thismonth.nums[1,2] 
+  # projects final number by multiplying mtd % growth by last year's end of month number
+  
+  bars <- c(cy.sum[1], py.sum[1], full.month.projected[1], thismonth.nums[1,2], thismonth.nums[1,1])
+  #print(bars)
+  gg.table <- data.frame(time = c("Month-To-Date", "Month-To-Date", "Full Month", "Full Month", "Full Month"),
+                         type = c("Actuals", "Prior Year", "Actuals", "Prior Year", "Budget"),
+                         NetBoB = as.numeric(bars))
+#  print(gg.table)
+  g <- ggplot(gg.table, aes(fill = type, x = time, y = NetBoB))
+  g <- g + geom_bar(position = "dodge", stat = "identity") + scale_y_continuous(labels = scales::comma)
+  g
+  print(g)
+  gg.table
+}
+
+premier.nxt2.0.imp <- function(){
+  require(googlesheets)
+  gs_auth()
+  nxt2.0 <- gs_key("1BuABxwWk3gt7SvskSAmdOrd3ZZXofBvZ713fur9QyLI")
+  nxt2.0.data <- gs_read(nxt2.0, ws = "PreC", range = "A1:O90")
+  #print(head(nxt2.0.data))
+  nxt2.0.data
+}
+
+drop.rate <- function(cy.py.period.df, period.to.date.nb = actual.periodtodate){
+  
+  numericize.vector2 <- function(vector.to.numericize){
+    require(magrittr)
+    #print(vector.to.numericize)
+    vector.fixed <- vector.to.numericize %>% gsub(",", "", .) %>% gsub("\\$","", .) %>% as.numeric(.)
+    #print(vector.fixed)
+    #print("NAs not removed in case need to maintain column length")
+    vector.fixed
+  }
+  
+  premier.drop.imp <- function(){
+    require(googlesheets)
+    gs_auth()
+    drop.report <- gs_key("1WZZWCIYnqzEdeiPFujhZ4JXrOX3oIGA3-Od4jJ0Ykwc")
+    drop.data <- gs_read(drop.report,ws = 1, range = "A1:Y500")
+    #print(head(drop.data))
+    drop.data
+  }
+  
+  drop.info <- premier.drop.imp()
+  
+  require(stringr)
+  prepped.df <- cy.py.period.df
+  prepped.df$TRANSACTION.MONTH <- prepped.df$TRANSACTION.MONTH %>% str_trim(.) %>% tolower(.)
+  
+  include.months <- unique(prepped.df$TRANSACTION.MONTH)
+  #print(include.months)
+  drop.info$Month <- drop.info$Month %>% str_trim(.) %>% tolower(.)
+  #drop.info$`DROP T
+  
+  drop.subset <- drop.info[drop.info$Month %in% include.months, ]
+  drop.subset$`Minus Drop/Switch Process Errors` <- numericize.vector2(drop.subset$`Minus Drop/Switch Process Errors`)
+  reason.agg <- aggregate(`Minus Drop/Switch Process Errors` ~ `DROP TYPE`, data = drop.subset, sum)
+  colnames(reason.agg) <- c("DROP.TYPE", "NET_BOB")
+  reason.agg <- reason.agg[!(reason.agg$NET_BOB == 0), ]
+  reason.agg$NET_BOB <- round(reason.agg$NET_BOB)
+  drop.total <- sum(reason.agg$NET_BOB, na.rm = TRUE)
+  drop.total <- round(drop.total)
+  total.row.df <- data.frame("DROP TYPE" = "DROP/MONEYBACK TOTAL", "NET_BOB" = drop.total)
+  drop.perc <- ((drop.total/period.to.date.nb)*100) %>% round(., 1) %>% paste0(., "%")
+  drop.perc.df <- data.frame("DROP TYPE" = "DROP % NETBOB", "NET_BOB" = drop.perc )
+  reason.agg <- rbind(reason.agg, total.row.df, drop.perc.df)
+  reason.agg <- reason.agg[!(reason.agg$NET_BOB == 0), ]
+  
+  reason.agg$NET_BOB <- paste0("$", prettyNum(reason.agg$NET_BOB, big.mark = ","))
+  #print(reason.agg)
+  require(gridExtra)
+  grid.table(reason.agg)
+}
+
+numericize.vector2 <- function(vector.to.numericize){
+  require(magrittr)
+  #print(vector.to.numericize)
+  vector.fixed <- vector.to.numericize %>% gsub(",", "", .) %>% gsub("\\$","", .) %>% as.numeric(.)
+  #print(vector.fixed)
+  #print("NAs not removed in case need to maintain column length")
+  vector.fixed
+}
+
+tutoring.per.call.agent <- function(file.name.in.downloads){
+  #make sure to use CREDITED sales from this report and open the rows
+  require(xlsx)
+  require(magrittr)
+
+  full.file.path <- paste0("D://Users/SPritchard/Downloads/", file.name.in.downloads)
+  metrics.data <- read.xlsx(full.file.path, sheetIndex = 2, rowIndex = 1:300, colIndex = 1:14)
+  tpc.data.pc <- metrics.data[!(metrics.data$X. %in% c("Samuel Slater", "Grad", "Overflow", "Michael Strippoli","Brian Paul", "Grand Total")), c(1, 4, 14) ]
+  tpc.data.pc <- tpc.data.pc[!(is.na(tpc.data.pc$Total.Contacts)),]
+  #print(tpc.data.pc)
+  colnames(tpc.data.pc) <- c("Agent", "Tutoring.Per.Call", "Total.Contacts")
+  rownames(tpc.data.pc) <- tpc.data.pc$Agent
+  require(ggplot2)
+  #print(class(tpc.data.pc$Tutoring.Per.Call))
+  tpc.data.pc$Tutoring.Per.Call <- tpc.data.pc$Tutoring.Per.Call %>% as.vector(.) %>% as.numeric(.) 
+  tpc.data.pc <- tpc.data.pc[!(is.na(tpc.data.pc$Tutoring.Per.Call)),]
+  #print(class(tpc.data.pc$Tutoring.Per.Call))
+  #print(tpc.data.pc$Tutoring.Per.Call)
+  #tpc.data.pc$Total.Contacts <- (tpc.data.pc$Total.Contacts)/100
+  tpc.data.pc$Tutoring.Per.Call <- (tpc.data.pc$Tutoring.Per.Call)*100
+  #tpc.data.pc$Tutoring...Call <- tpc.data.pc$Tutoring...Call
+  #tpc.data.pc$Tutoring...Call <- as.factor(tpc.data.pc$Tutoring...Call)
+  #gtpc <- ggplot(tpc.data.pc, aes(x=1, y=Tutoring...Call, color=X., size=Total.Contacts))
+  #print(tpc.data.pc)
+  gtpc <- ggplot(tpc.data.pc, aes(x=Agent, y=Tutoring.Per.Call, size=Total.Contacts))
+  #gtpc <- ggplot(tpc.data.pc, aes(x=1, y=Tutoring...Call))
+  gtpc <- gtpc + geom_point(alpha=0.6)
+  gtpc <- gtpc + theme(axis.text.x=element_text(angle=45,hjust=1)) ######## testing if this moves labels more legibly
+  #gtpc <- gtpc + geom_label(label=tpc.data.pc$X., size=tpc.data.pc$Total.Contacts) # USE FOR LABELS WITH VARIED SIZES
+  #print(length(row.names(tpc.data.pc)))
+  #gtpc <- gtpc + geom_label(label=row.names(tpc.data.pc), nudge_x = 0.25, nudge_y = 0.2) # USE TO ACCOMPANY POINTS
+    #geom_label(label=rownames(data), nudge_x = 0.25, nudge_y = 0.2)
+  print(gtpc)
+}
+
+premier.mix.totals<- function(full.obj.fix2, cy.start.date2, cy.end.date2 = "latest.available"){
+
+  
+  yy.periodtodate <- function(full.obj, cy.start.date, cy.end.date = "latest.available"){
+    full.obj.dates <- full.obj
+    # Watch for monthly numbers imported as factors!
+    #1 MATCH TIMELINE OF cy.df TO py.df AND JOIN THEM
+    #print("line 7")
+    #full.obj.dates <- full.obj[full.obj$TRANSACTION.DATE != "" & full.obj$TRANSACTION.DATE != "0",]
+    #full.obj.dates <- full.obj
+    #print("line 9")
+    full.obj.dates$TRANSACTION.DATE <- as.Date(full.obj.dates$TRANSACTION.DATE, "%m/%d/%Y")
+    
+    #print("line 11")
+    
+    cy.start <- as.Date(cy.start.date, "%Y-%m-%d")
+    cy.end <- if(cy.end.date == "latest.available"){
+      max(full.obj.dates$TRANSACTION.DATE, na.rm = TRUE)
+    } else {
+      as.Date(cy.end.date, "%Y-%m-%d")
+    }
+    #cy.end <- max(full.obj.dates$TRANSACTION.DATE)
+    cy.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= cy.start
+                                  & full.obj.dates$TRANSACTION.DATE <= cy.end,]
+    #print(head(cy.yysubset))
+    py.start <- if((cy.start - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+      cy.start - 366
+    } else {
+      cy.start - 365
+    }
+    #py.start <- (cy.start - 365)
+    py.end <- if((cy.end - 365) <= as.Date("2016-02-29", "%Y-%m-%d")){
+      cy.end - 366
+    } else {
+      cy.end - 365
+    }
+    
+    #py.end <- (cy.end - 365)
+    py.yysubset <- full.obj.dates[full.obj.dates$TRANSACTION.DATE >= py.start 
+                                  & full.obj.dates$TRANSACTION.DATE <= py.end,]
+    #print(head(py.yysubset))
+    #print(tail(py.yysubset))
+    cy.py.dates <- rbind(cy.yysubset, py.yysubset)
+    #cy.py.dates$TRANSACTION.DATE <- as.Date(cy.py.dates$TRANSACTION.DATE)
+    cy.py.dates <- cy.py.dates[(!is.na(cy.py.dates$NETBOB)), ]
+    cy.py.dates
+  }
+  
+  yy.obj <- yy.periodtodate(full.obj = full.obj.fix2, cy.start.date = cy.start.date2, cy.end.date = cy.end.date2)
+  
+
+  prod.hours <- read.csv("D://Users/SPritchard/Music/Documents/R/premier/packages.by.hours.csv", stringsAsFactors = FALSE)
+  #print(head(prod.hours))  
+
+  all.data <- yy.obj
+  #all.data.cl <- all.data[all.data$TRANSACTION.DATE != "",]
+  all.data.cl <- all.data
+  #all.data.cl$TRANSACTION.DATE <- as.Date(all.data.cl$TRANSACTION.DATE, "%m/%d/%Y")
+  
+  #print("all.data.cl head is")
+  #print(head(all.data.cl))
+  
+  data.premier <- all.data.cl[all.data.cl$PROGRAM == "PREMIER",]
+  data.whours <- merge(data.premier, prod.hours)
+  
+  cy.data <- data.whours[data.whours$TRANSACTION.YEAR %in% "2017",]
+  py.data <- data.whours[data.whours$TRANSACTION.YEAR %in% "2016",]
+  hour.year.cy <- paste(cy.data$hours, "2017")
+  hour.year.py <- paste(py.data$hours, "2016")
+  
+
+  cy.agg <- aggregate(NETBOB ~ hours, cy.data, sum)
+  py.agg <- aggregate(NETBOB ~ hours, py.data, sum)
+  #print(cy.agg)
+  hour.year.cy <- paste(cy.agg$hours, "2017")
+  hour.year.py <- paste(py.agg$hours, "2016")
+  #print(hour.year.cy)
+  
+  
+  cy.agg2 <- cbind(cy.agg, hour.year.cy)
+  py.agg2 <- cbind(py.agg, hour.year.py)
+  colnames(cy.agg2) <- c("hours", "NETBOB", "hours.by.year")
+  colnames(py.agg2) <- c("hours", "NETBOB", "hours.by.year")
+  #print(cy.agg2)
+  #print(py.agg2)
+  
+  data.for.bars <- rbind(py.agg2, cy.agg2)
+  
+  pretty.netbob <- paste0("$",prettyNum(round(data.for.bars$NETBOB), big.mark = ","))
+  
+  data.for.bars <- cbind(data.for.bars, pretty.netbob)
+  hours.table <- data.for.bars$hours
+  hours.levels <- hours.table[order(hours.table)]
+  data.for.bars$hours <- factor(data.for.bars$hours, levels = unique(hours.levels))
+  
+  level.switch <- c("10s 2016", "10s 2017", "20s 2016", "20s 2017", "30s up 2016", "30s up 2017", 
+                    "Add-On 2016", "Add-On 2017", "HS Admiss 2016", "HS Admiss 2017", 
+                    "AP Subject 2016", "AP Subject 2017", "Other 2017")
+  data.for.bars$hours.by.year <- factor(data.for.bars$hours.by.year, levels = level.switch)
+  #print(data.for.bars)
+  #print(str(data.for.bars))
+  
+  require(ggplot2)
+  
+  ghours <- ggplot(data = data.for.bars, aes(fill = hours, x = hours.by.year, y = NETBOB))
+  ghours <- ghours + geom_bar(position = "dodge", stat = "identity") 
+  ghours <- ghours + scale_y_continuous(labels = scales::comma) + coord_flip() + theme(legend.position = "top")
+  ghours <- ghours + geom_text(aes(label=pretty.netbob), hjust=-0.4)
+  print(ghours)
+  #data.for.bars
+}
+
+premier.mix<- function(mtd.object, prior.mos.yrs.obj, start.date.cy, end.date.cy, roll.days = 1){
+  # remember need data 30 days earlier than graph start date for rolling 30
+  # rbind all objects into 1
+  # cut object twice to cy timeframe & py timeframe
+  # re-rbind them
+  # read in table with product names corresponding to 10s, 20s, 30s
+  # create 6 vectors
+  # 12 rolling 30 cy
+  # 20s rolling 30 cy
+  # 30s rolling 30 cy
+  # 12 roling 30 py
+  # 20s rolling 30 py
+  # 30s rolling 30 cy
+  # graph with ggplot2 and link colors; cy bolder and py faded versions of same colors
+  start.date.cy <- as.Date(start.date.cy)
+  end.date.cy <- as.Date(end.date.cy)
+  #print(paste(start.date.cy, end.date.cy))
+  prod.hours <- read.csv("D://Users/SPritchard/Music/Documents/R/premier/packages.by.hours.csv", stringsAsFactors = FALSE)
+  #print(head(prod.hours))  
+  all.data <- rbind(prior.mos.yrs.obj, mtd.object)
+  #print(paste("all.data dim =", dim(all.data)))
+  
+  all.data.cl <- all.data[all.data$TRANSACTION.DATE != "",]
+  
+  all.data.cl$TRANSACTION.DATE <- as.Date(all.data.cl$TRANSACTION.DATE, "%m/%d/%Y")
+  
+  #print("all.data.cl head is")
+  #print(head(all.data.cl))
+  
+  data.premier <- all.data.cl[all.data.cl$PROGRAM == "PREMIER",]
+  data.whours <- merge(data.premier, prod.hours)
+  
+  cy.data <- data.whours[data.whours$TRANSACTION.DATE >= start.date.cy
+                         & data.whours$TRANSACTION.DATE <= end.date.cy,]
+  cy.lag <- data.whours[data.whours$TRANSACTION.DATE >= (start.date.cy - roll.days)
+                         & data.whours$TRANSACTION.DATE <= end.date.cy,]
+  #print(head(cy.data))
+  #print(head(cy.lag))
+  
+  #start.date.py <- start.date.cy - 365
+  #end.date.py <- end.date.cy - 365
+  #py.data <- all.data.cl[all.data.cl$TRANSACTION.DATE >= start.date.py
+  #                     & all.data.cl$TRANSACTION.DATE <= end.date.py,]
+  
+  # this plot is a test to see if I can generate a graph this way
+  #qplot(PROGRAM, TRANSACTION.DATE , data = cy.data, geom = "density", weight = NETBOB, fill = PROGRAM)
+  #cy.premier <- cy.data[cy.data$PROGRAM == "PREMIER",]
+  #cy.whours <- merge(cy.premier, prod.hours)
+  cy.agg <- aggregate(NETBOB ~ TRANSACTION.DATE + hours, cy.data, sum)
+  cy.agglag <- aggregate(NETBOB ~ TRANSACTION.DATE + hours, cy.lag, sum)
+  
+  #Plot with all hours categories
+  g <- ggplot(data = cy.agg, aes(TRANSACTION.DATE, NETBOB))
+  g + geom_line(aes(color = hours), size = 2)
+  
+  cy.bigs <- cy.agg[cy.agg$hours %in% c("10s", "20s", "30s up"),]
+  #print(dim(cy.bigs))
+  
+  #cy.data
+  
+  #10s
+  
+  cy.tens.len <- nrow(cy.agg[cy.agg$hours == "10s",])
+  
+  means <- numeric()
+  for(i in 1:cy.tens.len){
+  #for(i in 1:6){
+    #print(paste("loop number", i))
+    cy.tens <- cy.agg[cy.agg$hours == "10s",]
+    lag.tens <- cy.agglag[cy.agglag$hours == "10s",]
+    #print(head(cy.tens, 2))
+    tens.dates <- cy.tens$TRANSACTION.DATE
+    interv.mean.i <- lag.tens[lag.tens$TRANSACTION.DATE >= (tens.dates[i]-roll.days)
+             & lag.tens$TRANSACTION.DATE <= (tens.dates[i]),]
+    
+    mean.i <- mean(interv.mean.i$NETBOB)
+    means <- c(means, mean.i)
+    
+    #print(mean.i)
+  }
+  cy.tens <- cbind(cy.tens, means)
+
+  
+  #20s
+  
+  cy.twents.len <- nrow(cy.agg[cy.agg$hours == "20s",])
+  
+  means <- numeric()
+  for(i in 1:cy.twents.len){
+    #for(i in 1:6){
+    #print(paste("loop number", i))
+    cy.twents <- cy.agg[cy.agg$hours == "20s",]
+    lag.twents <- cy.agglag[cy.agglag$hours == "20s",]
+    #print(head(cy.twents, 2))
+    twents.dates <- cy.twents$TRANSACTION.DATE
+    interv.mean.i <- lag.twents[lag.twents$TRANSACTION.DATE >= (twents.dates[i]-roll.days)
+                              & lag.twents$TRANSACTION.DATE <= (twents.dates[i]),]
+    
+    mean.i <- mean(interv.mean.i$NETBOB)
+    means <- c(means, mean.i)
+    
+    #print(mean.i)
+  }
+  cy.twents <- cbind(cy.twents, means)
+  cy.twents
+  
+  #30s
+  
+  cy.thirts.len <- nrow(cy.agg[cy.agg$hours == "30s up",])
+  
+  means <- numeric()
+  for(i in 1:cy.thirts.len){
+    #for(i in 1:6){
+    #print(paste("loop number", i))
+    cy.thirts <- cy.agg[cy.agg$hours == "30s up",]
+    lag.thirts <- cy.agglag[cy.agglag$hours == "30s up",]
+    #print(head(cy.thirts, 2))
+    thirts.dates <- cy.thirts$TRANSACTION.DATE
+    interv.mean.i <- lag.thirts[lag.thirts$TRANSACTION.DATE >= (thirts.dates[i]-roll.days)
+                                & lag.thirts$TRANSACTION.DATE <= (thirts.dates[i]),]
+    
+    mean.i <- mean(interv.mean.i$NETBOB)
+    means <- c(means, mean.i)
+    
+    #print(mean.i)
+  }
+  cy.thirts <- cbind(cy.thirts, means)
+  cy.ttt <- rbind(cy.tens, cy.twents, cy.thirts)
+  cy.ttt
+  g <- ggplot(data = cy.ttt, aes(TRANSACTION.DATE, means))
+  g <- g + geom_line(aes(color = hours), size = 2)
+  g + labs(title = paste("Premier Package Size Mix for", start.date.cy, "through", end.date.cy, "for a rolling", roll.days, "days"))
+}
+
+### use functions ###
+pcnetbob.download()
+current.mtd <- new.month("PC NetBoB Daily.xls")
+prior.mos <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/az/ly.ytlastmonth.fix.csv", stringsAsFactors = FALSE)
+
+class.data <- read.csv("D://Users/SPritchard/Music/Documents/R/net-bob-scripts/PC Class Data.csv", stringsAsFactors = FALSE)
+
+current.mtd.fix <- mtd.prep(current.mtd, class.data.obj = class.data, "2016-01-01", "2017-12-31")
+
+full.obj.fix <- rbind(prior.mos, current.mtd.fix)
+```
+
+## Overall Net BoB Performance
+
+```{r, echo=FALSE, fig.height=6, fig.width=6, warning=FALSE}
+
+df.to.use <- yy.periodtodate(full.obj.fix, cy.start.date = cy.start2)
+
+data.table0 <- yy.netbob(df.to.use, thismonth.start.date = cy.start2)
+actual.periodtodate <- data.table0[1,3]
+data.table1 <- data.table0
+
+data.table1$NetBoB <- round(data.table1$NetBoB, 0)
+data.table1$NetBoB <- prettyNum(data.table1$NetBoB, big.mark = ",")
+data.table1$NetBoB <- paste0("$", data.table1$NetBoB)
+#print(data.table1)
+Perc.Chg <- paste0(round(((data.table0[1,3]-data.table0[2,3])/data.table0[2,3])*100,1),"%")
+
+grid.df <- data.frame("Time Range" = c("MTD", "Full Mo.(Proj.)"), 
+                      "Actuals" = c(data.table1[1,3], data.table1[3, 3]), 
+                      "Prior" = c(data.table1[2,3], data.table1[4, 3]), 
+                      "Budget" = c(" ", data.table1[5, 3]),
+                      "Perc Chg" = c(Perc.Chg," "))
+```
+
+```{r, echo=FALSE, fig.height=1.5, fig.width=6}
+
+library(gridExtra)
+grid.table(grid.df)
+
+```
+
+## Baselines By Day
+
+```{r, echo=FALSE}
+
+eom.df <- yy.periodtodate.eom(full.obj.fix, cy.start.date = cy.start2)
+
+baseline.bars <- premier.calendar.group.bar(eom.df, day.digits = 2)
+```
+
+## Tutoring Per Call & LOL %
+
+```{r, echo=FALSE, verbose= FALSE, warning=FALSE, message=FALSE, fig.height=3, fig.width=6}
+#This part works properly but should be turned into some real functions beyond just reading in the data
+
+nxt.data <- premier.nxt2.0.imp()
+last.avail.date <- max(df.to.use$TRANSACTION.DATE, na.rm = TRUE) # use the same year/year file as in first figure
+#print(max(df.to.use$TRANSACTION.DATE, na.rm = TRUE))
+last.avail.date <- as.Date(last.avail.date)
+search.month <- months(last.avail.date)
+#print(search.month)
+
+require(dplyr)
+#direct close rate 17
+direct.close17 <- nxt.data[14, colnames(nxt.data) %in% search.month]
+direct.close.len17 <- nchar(direct.close17)
+direct.close.trim17 <- substr(direct.close17, 1, direct.close.len17-1)
+direct.close.num17 <- as.numeric(direct.close.trim17)
+
+###direct close rate 16
+direct.close16 <- nxt.data[13, colnames(nxt.data) %in% search.month]
+direct.close.len16 <- nchar(direct.close16)
+direct.close.trim16 <- substr(direct.close16, 1, direct.close.len16-1)
+direct.close.num16 <- as.numeric(direct.close.trim16)
+
+###tutoring % 17
+#tutoring.enroll.perc17 <- nxt.data[62, colnames(nxt.data) %in% search.month]
+#tutoring.enroll.len17 <- nchar(tutoring.enroll.perc17)
+#tutoring.enroll.trim17 <- substr(tutoring.enroll.perc17, 1, tutoring.enroll.len17-1)
+#tutoring.enroll.num17 <- as.numeric(tutoring.enroll.trim17)
+
+tutoring.enroll.perc17 <- nxt.data[62, colnames(nxt.data) %in% search.month]
+tutoring.enroll.len17 <- nchar(tutoring.enroll.perc17)
+tutoring.enroll.num17 <- tutoring.enroll.perc17 %>% substr(., 1, tutoring.enroll.len17-1) %>% as.numeric()
+
+###tutoring % 16
+tutoring.enroll.perc16 <- nxt.data[61, colnames(nxt.data) %in% search.month]
+tutoring.enroll.len16 <- nchar(tutoring.enroll.perc16)
+tutoring.enroll.trim16 <- substr(tutoring.enroll.perc16, 1, tutoring.enroll.len16-1)
+tutoring.enroll.num16 <- as.numeric(tutoring.enroll.trim16)
+
+tutor.call17 <- (direct.close.num17/100)*tutoring.enroll.num17
+tutor.call.text17 <- paste0(round(tutor.call17,1),"%")
+#print(tutor.call.text17)
+
+tutor.call16 <- (direct.close.num16/100)*tutoring.enroll.num16
+tutor.call.text16 <- paste0(round(tutor.call16,1),"%")
+#print(tutor.call.text16)
+tutor.call.diff <- paste0(round((tutor.call17-tutor.call16),1), "%")
+#print(tutor.call.diff)
+tutor.call.perc <- paste0(round(((tutor.call17-tutor.call16)/tutor.call16)*100,1), "%")
+#print(tutor.call.perc)
+
+#LOL Tutoring %
+lol.perc17 <- nxt.data[71, colnames(nxt.data) %in% search.month]
+lol.perc16 <- nxt.data[70, colnames(nxt.data) %in% search.month]
+
+lol.perc.len17 <- nchar(lol.perc17)
+lol.perc.num17 <- lol.perc17 %>% substr(., 1, (lol.perc.len17-1)) %>% as.numeric()
+
+lol.perc.len16 <- nchar(lol.perc16)
+lol.perc.num16 <- lol.perc16 %>% substr(., 1, (lol.perc.len16-1)) %>% as.numeric()
+#lol.perc.diff <- (lol.perc.num17-lol.perc.num16) %>% round(., 1) %>% paste0(., "%")
+lol.perc.diff <- paste0(round(lol.perc.num17-lol.perc.num16,1), "%")
+#lol.perc.perc <- ((lol.perc17-lol.perc16)/lol.perc.num16) %>% round(., 1) %>% paste0(., "%")
+lol.perc.perc <- paste0(round(((lol.perc.num17-lol.perc.num16)/lol.perc.num16)*100, 1), "%")
+tutor.call.df <- data.frame("Metric" = c("Tutoring Per Call", "LOL Tutoring %"),
+                            "CY" = c(tutor.call.text17, as.character(lol.perc17)), 
+                            "PY" = c(tutor.call.text16, as.character(lol.perc16)), 
+                            "Diff" = c(tutor.call.diff, lol.perc.diff),
+                            "Perc Chg" = c(tutor.call.perc, lol.perc.perc))
+grid.table(tutor.call.df)
+
+```
+
+## Tutoring Per Call By Agent
+
+```{r, echo=FALSE, verbose= FALSE, warning=FALSE, message=FALSE, fig.height = 5, fig.width=7}
+
+tutoring.per.call.agent(tutoring.per.call.agent.filename)
+
+```
+
+
+
+##Drop Rate Period To Date
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=4, fig.width=6}
+
+drop.rate(df.to.use)
+
+
+```
+
+##Premier Package Totals
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=6, fig.width=7}
+
+premier.mix.totals(full.obj.fix, cy.start2)
+
+
+```
+
+
+##Premier Package Trends
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=6, fig.width=7}
+
+pmix <- premier.mix(current.mtd.fix, prior.mos, cy.start2, "2017-12-31", roll.days = 5)
+print(pmix)
+
+```
+
+
+
+
+
